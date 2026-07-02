@@ -47,45 +47,45 @@ The engine is a **14-stage, rules-first video processing pipeline** that transcr
 ```mermaid
 flowchart TB
     subgraph Input["Video Input"]
-        A[YouTube URL / Local File]
+        A[YouTube URL slash Local File]
     end
 
-    subgraph Stage1["Stage 1-3: Audio and Transcription"]
+    subgraph Audio["Audio and Transcription"]
         B[FFmpeg Audio Extraction]
         C[Groq Whisper Transcription]
         D[WhisperX Alignment]
     end
 
-    subgraph Stage2["Stage 4-5: Segmentation"]
-        E[Atomic Segmentation]
-        F[Short Segment Merging]
+    subgraph Segment["Atomic Segmentation"]
+        E[Punctuation Split]
+        F[Time Split and Merge]
     end
 
-    subgraph Stage3["Stage 6-7: Feature Extraction"]
+    subgraph Features["Feature Extraction"]
         G[VADER Sentiment]
         H[Pattern Matching]
         I[Audio Features]
         J[Structural Features]
     end
 
-    subgraph Stage4["Stage 8-9: Knowledge Graph"]
+    subgraph Graph["Knowledge Graph"]
         K[Relationship Detection]
         L[Context Database]
     end
 
-    subgraph Stage5["Stage 10-12: Hook Detection and Clip Gen"]
+    subgraph Detection["Hook and Clip Gen"]
         M[Hook Rules]
         N[Body and Ending Selection]
         O[Multi-Segment Clip Assembly]
     end
 
-    subgraph Stage6["Stage 13-14: Scoring and LLM"]
+    subgraph Scoring["Scoring and LLM"]
         P[6-Rule Validation]
         Q[Scoring Engine]
         R[LLM Teacher]
     end
 
-    subgraph Stage7["Stage 15+: ML and Persistence"]
+    subgraph ML["ML and Persistence"]
         S[Pattern Detector]
         T[Confidence Propagation]
         U[SQLite and JSON Storage]
@@ -224,7 +224,7 @@ flowchart LR
 flowchart LR
     C[Audio Chunks] --> G[Groq API<br/>whisper-large-v3<br/>Parallel]
     G --> M[Merge Chunks<br/>10-word overlap dedup]
-    M --> F[Filler Removal<br/>(um, uh, you know)]
+    M --> F[Filler Removal<br/>um uh you know]
     F --> W[WhisperX<br/>Forced Alignment<br/>Word timestamps]
     W --> S[Aligned Segments<br/>with word-level timing]
 ```
@@ -535,15 +535,15 @@ Uses `networkx.DiGraph` to model relationships between segments within a single 
 ```mermaid
 flowchart LR
     subgraph Video["Single Video"]
-        S1[Segment 1<br/>"What if I told you..."]
-        S2[Segment 2<br/>"I spent 10 years..."]
-        S3[Segment 3<br/>"Here's the thing..."]
-        S4[Segment 4<br/>"The biggest mistake..."]
+        S1[Segment 1<br/>What if I told you]
+        S2[Segment 2<br/>I spent 10 years]
+        S3[Segment 3<br/>Heres the thing]
+        S4[Segment 4<br/>The biggest mistake]
 
-        S1 -- "follows (1.0)" --> S2
-        S1 -- "explains (0.8)" --> S3
-        S2 -- "contrasts (0.85)" --> S4
-        S3 -- "concludes (0.75)" --> S4
+        S1 -- "follows 1.0" --> S2
+        S1 -- "explains 0.8" --> S3
+        S2 -- "contrasts 0.85" --> S4
+        S3 -- "concludes 0.75" --> S4
     end
 ```
 
@@ -583,7 +583,7 @@ The pattern system discovers **recurring node-type sequences** across clips and 
 ```mermaid
 flowchart LR
     ACCEPTED[Accepted Clips] --> DISCOVER[PatternDetector]
-    DISCOVER --> S2[S2: Sequences of<br/>node types (len 2-5)]
+    DISCOVER --> S2N[Sequence patterns<br/>node types len 2 to 5]
     DISCOVER --> CONF[Confidence 0.01-0.99<br/>freshness decay<br/>365 day half-life]
     DISCOVER --> PERF[Performance boost<br/>on positive outcomes]
     CONF --> MATCH[PatternMatcher]
@@ -746,10 +746,10 @@ TF-IDF based: measures how rare the clip's words are within the full transcript.
 flowchart LR
     TRANS[Full Transcript] --> FREQ[Word Frequencies<br/>Counter]
     CLIP[Clip Text] --> WORDS[Clip Words]
-    FREQ --> IDF[IDF per word<br/>log(N over freq)]
+    FREQ --> IDF[IDF per word<br/>log N over freq]
     WORDS --> IDF
     IDF --> AVG[Average IDF]
-    AVG --> UNIQ[min(avg_idf over 3, 1.0)]
+    AVG --> UNIQ[avg_idf over 3 capped 1.0]
 ```
 
 ---
