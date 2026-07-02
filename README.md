@@ -1,37 +1,37 @@
-# Trimora — AI Video Intelligence Pipeline
+# OpenShorts (Trimora) — AI Vertical Short Generator
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 
-**Trimora** is an AI-powered vertical video generator — it transforms long YouTube videos or local uploads into viral-ready short clips (9:16 format) for TikTok, Instagram Reels, and YouTube Shorts.
+OpenShorts is an AI-powered vertical video generator — it transforms long YouTube videos or local uploads into viral-ready short clips (9:16 format) for TikTok, Instagram Reels, and YouTube Shorts.
 
-The project has two major components:
+The project has three major components:
 
-- **`engine/`** — A modular, rules-first video intelligence pipeline (Python)
-- **`app/` + `dashboard/`** — A full-stack web application with FastAPI backend and React frontend
+- **`engine/`** — A modular, rules-first 14-stage video intelligence pipeline (Python)
+- **`app.py`** — FastAPI web server with async background processing
+- **`dashboard/`** — React + Vite frontend with Remotion rendering
 
 ---
 
 ## Table of Contents
 
-- [Engine Pipeline Overview](#engine-pipeline-overview)
+- [Quick Start (Windows)](#quick-start-windows)
+- [Quick Start (Docker)](#quick-start-docker)
 - [Architecture](#architecture)
 - [Pipeline Stages](#pipeline-stages)
 - [Folder Structure](#folder-structure)
+- [API Endpoints](#api-endpoints)
+- [Internal Clip Processing](#internal-clip-processing)
 - [Rule System](#rule-system)
 - [Knowledge Graph](#knowledge-graph)
 - [Pattern Intelligence](#pattern-intelligence)
 - [Confidence & Routing](#confidence--routing)
 - [Scoring](#scoring)
 - [LLM Teacher](#llm-teacher)
-- [Quick Start (Engine)](#quick-start-engine)
-- [Quick Start (Docker)](#quick-start-docker)
 - [Configuration](#configuration)
-- [API Endpoints](#api-endpoints)
 - [Frontend Dashboard](#frontend-dashboard)
-- [Tech Stack](#tech-stack)
 - [Environment Variables](#environment-variables)
 - [Features](#features)
 - [Who Is This For?](#who-is-this-for)
@@ -40,81 +40,57 @@ The project has two major components:
 
 ---
 
-## Engine Pipeline Overview
+## Quick Start (Windows)
 
-The engine is a **14-stage, rules-first video processing pipeline** that transcribes, segments, analyzes, and scores video content to identify the best 45–90 second clips for short-form platforms. It uses a **cascading confidence system** to decide whether to use local rules, patterns, or LLM calls at each stage — minimizing API costs while maximizing quality.
+```powershell
+# 1. Clone
+git clone https://github.com/your-username/Trimora.git
+cd Trimora
 
-```mermaid
-flowchart TB
-    subgraph Input["Video Input"]
-        A[YouTube URL slash Local File]
-    end
-
-    subgraph Audio["Audio and Transcription"]
-        B[FFmpeg Audio Extraction]
-        C[Groq Whisper Transcription]
-        D[WhisperX Alignment]
-    end
-
-    subgraph Segment["Atomic Segmentation"]
-        E[Punctuation Split]
-        F[Time Split and Merge]
-    end
-
-    subgraph Features["Feature Extraction"]
-        G[VADER Sentiment]
-        H[Pattern Matching]
-        I[Audio Features]
-        J[Structural Features]
-    end
-
-    subgraph Graph["Knowledge Graph"]
-        K[Relationship Detection]
-        L[Context Database]
-    end
-
-    subgraph Detection["Hook and Clip Gen"]
-        M[Hook Rules]
-        N[Body and Ending Selection]
-        O[Multi-Segment Clip Assembly]
-    end
-
-    subgraph Scoring["Scoring and LLM"]
-        P[6-Rule Validation]
-        Q[Scoring Engine]
-        R[LLM Teacher]
-    end
-
-    subgraph ML["ML and Persistence"]
-        S[Pattern Detector]
-        T[Confidence Propagation]
-        U[SQLite and JSON Storage]
-    end
-
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
-    F --> G
-    F --> H
-    F --> I
-    F --> J
-    G --> K
-    H --> K
-    I --> K
-    J --> K
-    K --> L
-    L --> M
-    M --> N
-    N --> O
-    O --> P
-    P --> Q
-    Q --> R
-    R --> S
-    S --> T
-    T --> U
+# 2. One-click launch (auto-installs everything)
+.\start.bat
 ```
+
+`start.bat` will:
+1. Check for Python, Node.js, and FFmpeg (auto-downloads FFmpeg via `install-ffmpeg.ps1`)
+2. Create a Python virtual environment in `venv/`
+3. Install `requirements.txt` + `requirements_engine.txt`
+4. Install `dashboard/` npm dependencies
+5. Start **Backend**: `uvicorn app:app --host 0.0.0.0 --port 8000 --reload`
+6. Start **Frontend**: `npm run dev` in `dashboard/`
+7. Open `http://localhost:5173` (dashboard) and `http://localhost:8000` (API)
+
+### Manual Backend
+
+```bash
+pip install -r requirements.txt
+pip install -r requirements_engine.txt
+set GROQ_API_KEY=gsk_your_key_here
+uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Manual Frontend
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+---
+
+## Quick Start (Docker)
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Backend | `8000` | FastAPI server |
+| Frontend | `5175` | Vite React dashboard (maps to internal 5173) |
+| Renderer | `3100` | Remotion video renderer |
 
 ---
 
@@ -122,34 +98,47 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    subgraph Core["Core Engine"]
+    subgraph Input["Input Sources"]
+        YT[YouTube URL] --> YDL[yt-dlp download]
+        FILE[Local File Upload] --> UPLOAD[Multipart upload]
+    end
+
+    subgraph API["FastAPI Backend (app.py)"]
+        EP["/api/process<br/>/api/engine/process"]
+        STATUS["/api/status/{job_id}"]
+        SUB["/api/subtitle"]
+        HOOK["/api/hook"]
+        EDIT["/api/edit"]
+        YDL --> EP
+        UPLOAD --> EP
+        EP --> ASYNC[Async background job<br/>_run_engine_process_job]
+    end
+
+    subgraph Engine["Engine Pipeline (14 stages)"]
         P[Pipeline Orchestrator]
-        KG[Knowledge Graph<br/>networkx.DiGraph]
+        KG[Knowledge Graph]
         CD[Context Database]
         CS[Confidence System]
         PI[Pattern Intelligence]
-    end
-
-    subgraph Storage["Storage Layer"]
-        JSON[JSON File Store<br/>per-video state.json]
-        SQL[SQLite DB<br/>14 tables]
-        GLOBAL[Global Knowledge Graph<br/>cross-video patterns]
+        ASYNC --> P
     end
 
     subgraph External["External APIs"]
-        GROQ[Groq API<br/>Whisper and LLM]
-        GEMINI[Gemini API<br/>LLM Teacher]
+        GROQ[Groq API<br/>Whisper + LLM]
+        GEMINI[Gemini API<br/>AI editing]
     end
 
-    subgraph Media["Media Processing"]
-        FF[FFmpeg]
-        LB[librosa]
-        WX[WhisperX]
+    subgraph Storage["Storage Layer"]
+        JSON[JSON file store<br/>per-video state.json]
+        SQL[SQLite DB]
+        GLOBAL[Global knowledge graph]
     end
 
-    P --> FF
-    P --> LB
-    P --> WX
+    subgraph Output["Output"]
+        CLIPS["9:16 Clips (.mp4)<br/>served via /videos/{job_id}/"]
+        TRANS["Transcript data<br/>(transcript-only mode)"]
+    end
+
     P --> GROQ
     P --> GEMINI
     P --> KG
@@ -159,11 +148,49 @@ flowchart LR
     P --> JSON
     P --> SQL
     P --> GLOBAL
+    STATUS --> CLIPS
+    SUB --> CLIPS
+    HOOK --> CLIPS
+    EDIT --> GEMINI
+```
+
+### Data Flow
+
+```
+User uploads video / submits YouTube URL
+        │
+        ▼
+  POST /api/engine/process
+        │
+        ├── Returns {job_id, status: "queued"}
+        │
+        ▼  (background)
+  _run_engine_process_job()
+        │
+        ├── 1. Load engine_config.yaml
+        ├── 2. If mode="transcript": transcribe only (Groq)
+        ├── 3. If mode="full": Pipeline.run()
+        │      14 stages (audio → transcription → clips)
+        ├── 4. For top 10 candidates: _cut_and_convert_clip()
+        │      FFmpeg cut + 9:16 conversion
+        └── 5. Return clips with metadata
+        │
+        ▼
+  GET /api/status/{job_id}   ◄── Poll until "completed"
+        │
+        ▼
+  Results: video_urls, hook_text, scores
+        │
+        ├── POST /api/hook       → Add text overlay
+        ├── POST /api/subtitle   → Burn subtitles
+        └── POST /api/edit       → AI video effects (Gemini)
 ```
 
 ---
 
 ## Pipeline Stages
+
+The engine is a **14-stage, rules-first video processing pipeline** that transcribes, segments, analyzes, and scores video content to identify the best 45–90 second clips for short-form platforms. It uses a **cascading confidence system** to decide whether to use local rules, patterns, or LLM calls at each stage — minimizing API costs while maximizing quality.
 
 ```mermaid
 flowchart LR
@@ -189,20 +216,20 @@ flowchart LR
 
 | Stage | Name | Description | Key Files |
 |-------|------|-------------|-----------|
-| 01 | Audio Extraction | FFmpeg extracts WAV (16kHz, mono) from video | `audio/extractor.py` |
+| 01 | Audio Extraction | FFmpeg extracts Opus (16kHz, mono) from video | `audio/extractor.py` |
 | 02 | Quality Check | librosa measures SNR, speech rate, volume RMS | `audio/quality.py` |
-| 03 | Chunking | Overlap chunking with pydub (30s/2s default) | `audio/chunker.py` |
-| 04 | Transcription | Groq Whisper large-v3 API for each chunk | `transcription/transcriber.py` |
-| 05 | Alignment | WhisperX word-level forced alignment | `transcription/aligner.py` |
+| 03 | Chunking | Overlap chunking with pydub (180s / 5s overlap) | `audio/chunker.py` |
+| 04 | Transcription | Groq Whisper large-v3 API — parallel via ThreadPoolExecutor | `transcription/transcriber.py` |
+| 05 | Alignment | WhisperX word-level forced alignment (disabled by default — CPU bottleneck) | `transcription/aligner.py` |
 | 06 | Segmentation | Punctuation + time-based atomic split; merge <2s | `segmentation/segmenter.py` |
 | 07 | Features | VADER sentiment, 73 regex patterns, audio features, structural position | `features/` |
-| 08 | Knowledge Graph | networkx DiGraph: follows, explains, contrasts, concludes, supports | `graph/` |
+| 08 | Knowledge Graph | networkx DiGraph: follows, explains, contrasts, concludes, supports | `graph/`, `knowledge/` |
 | 09 | Context DB | Tracks which segments need/provide context | `knowledge/context_db.py` |
 | 10 | Hook Detection | 6 heuristic rules (energy, curiosity, contrast, etc.) | `rules/hook_rules.py` |
-| 11 | Body/Ending Selection | Graph-connected body sequences + ending candidates | `rules/body_rules.py`, `rules/ending_rules.py` |
+| 11 | Body/Ending | Graph-connected body sequences + ending candidates | `rules/body_rules.py`, `rules/ending_rules.py` |
 | 12 | Validation | 6 hard filters: duration, hook position, curiosity, value, speaker, context | `scoring/rule_engine.py` |
 | 13 | Scoring | Weighted hook/body/ending + flow + uniqueness scores | `scoring/scorer.py` |
-| 14 | LLM Label | (Optional) Groq/Gemini labels segments & candidates | `llm/teacher.py` |
+| 14 | LLM Label | (Optional) Groq Llama labels segments & candidates | `llm/teacher.py` |
 | 15 | Persistence | SQLite + JSON per-video state storage | `data/` |
 | 16+ | ML Learning | Pattern discovery, confidence propagation, global graph | `patterns/`, `confidence/` |
 
@@ -212,133 +239,48 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    V[Video File] --> F[FFmpeg<br/>pcm_s16le<br/>16kHz mono WAV]
+    V[Video File] --> F[FFmpeg<br/>libopus<br/>16kHz mono Opus]
     F --> Q[librosa<br/>SNR / Speech Rate / Volume]
-    Q --> C[pydub<br/>Overlap Chunking<br/>30s + 2s overlap]
+    Q --> C[pydub<br/>Overlap Chunking<br/>180s + 5s overlap]
     C --> T[Chunks ready]
 ```
+
+- **Audio format**: Opus (12k bitrate) — switched from WAV/pcm_s16le for smaller files
+- **Parallel transcription**: Chunks transcribed simultaneously via `ThreadPoolExecutor` (worker count from config)
 
 #### 04–05: Transcription & Alignment
 
 ```mermaid
 flowchart LR
-    C[Audio Chunks] --> G[Groq API<br/>whisper-large-v3<br/>Parallel]
+    C[Audio Chunks] --> G[Groq API<br/>whisper-large-v3<br/>Parallel ThreadPoolExecutor]
     G --> M[Merge Chunks<br/>10-word overlap dedup]
     M --> F[Filler Removal<br/>um uh you know]
-    F --> W[WhisperX<br/>Forced Alignment<br/>Word timestamps]
-    W --> S[Aligned Segments<br/>with word-level timing]
+    F --> S[Segments<br/>with text + timing]
 ```
 
-#### 06–07: Segmentation & Features
-
-```mermaid
-flowchart LR
-    A[Aligned Segments] --> P[Punctuation Split<br/>dot, excl, ques, newline]
-    P --> T[Time Split<br/>over 8s chunks]
-    T --> M[Merge Short<br/>under 2s]
-    M --> S[Atomic Segments]
-    S --> V[VADER Sentiment]
-    S --> RX[73 Regex Patterns<br/>8 categories]
-    S --> LB[librosa Audio Feats<br/>speech rate, volume]
-    S --> ST[Structural Feats<br/>position, recency]
-```
-
-#### 08–09: Knowledge Graph
-
-Segments are added to a `networkx.DiGraph` with typed, weighted edges:
-
-```mermaid
-flowchart LR
-    S1[Segment A] -- "follows (1.0)" --> S2[Segment B]
-    S2 -- "explains (0.8)" --> S3[Segment C]
-    S1 -- "contrasts (0.7)" --> S3
-    S3 -- "concludes (0.75)" --> S4[Segment D]
-    S4 -- "supports (0.6)" --> S5[Segment E]
-```
-
-Edge types and detection:
-
-| Edge Type | Detection | Weight Range |
-|-----------|-----------|--------------|
-| `follows` | Temporal adjacency | 1.0 |
-| `explains` | Shared keywords + explanation regex | 0.7–0.9 |
-| `contrasts` | Sentiment delta > 0.3 + contrast regex | 0.7–0.9 |
-| `concludes` | Position > 50% + conclusion regex | 0.6–0.8 |
-| `supports` | Shared keywords + support regex | 0.5–0.7 |
-
-#### 10–12: Hook Detection & Clip Generation
-
-```mermaid
-flowchart LR
-    KG[Knowledge Graph] --> HR[Hook Rules<br/>6 scoring rules]
-    HR --> HC[Hook Candidates<br/>score > 50]
-    HC --> BR[Body Rules<br/>graph + temporal]
-    BR --> BS[Body Sequences<br/>chained by time]
-    BS --> ER[Ending Rules<br/>takeaway + positive]
-    ER --> EC[Ending Candidates]
-    EC --> ASM[Assemble Clips<br/>hook + body_seq + ending]
-    ASM --> VAL[6-Rule Validation]
-    VAL --> ACCEPT[Accepted Clips]
-```
-
-#### 13–14: Scoring & LLM
-
-Each accepted clip is scored on 6 dimensions:
-
-```
-Total Score = 0.35 × Hook + 0.25 × Body + 0.20 × Ending + 0.15 × Flow + 0.05 × Practicality + 0.05 × Uniqueness
-```
-
-```mermaid
-flowchart LR
-    CLIP[Validated Clip] --> H[0.35 Hook<br/>curiosity and energy]
-    CLIP --> B[0.25 Body<br/>personal and sentiment]
-    CLIP --> E[0.20 Ending<br/>takeaway and positivity]
-    CLIP --> F[0.15 Flow<br/>transitions and arc]
-    CLIP --> P2[0.05 Practicality<br/>actionable content]
-    CLIP --> U[0.05 Uniqueness<br/>TF-IDF vs transcript]
-    H --> TOTAL[Total Score]
-    B --> TOTAL
-    E --> TOTAL
-    F --> TOTAL
-    P2 --> TOTAL
-    U --> TOTAL
-```
-
-#### 15–16+: ML & Persistence
-
-```mermaid
-flowchart LR
-    ACCEPT[Accepted Clips] --> FS[FailureStore<br/>rule failure rates]
-    ACCEPT --> PD[PatternDetector<br/>node-type sequences]
-    PD --> PM[PatternMatcher<br/>local to global]
-    PM --> PE[PatternEvolution<br/>version tracking]
-    PM --> GG[GlobalGraph<br/>cross-video learning]
-    ACCEPT --> CP[ConfidencePropagator<br/>stage reliability cascade]
-    CP --> AT[AdaptiveThreshold<br/>routing decision]
-    AT --> ROUTE{Route}
-    ROUTE -- "above 0.90" --> LOCAL[Local Model]
-    ROUTE -- "0.75 to 0.90" --> PATT[Pattern]
-    ROUTE -- "0.60 to 0.75" --> RULE[Rule Engine]
-    ROUTE -- "0.30 to 0.60" --> LLM[LLM Teacher]
-    ROUTE -- "below 0.30" --> HUMAN[Human Review]
-```
+WhisperX alignment is **disabled by default** (CPU bottleneck). To enable, set `align_segments` in `pipeline.py`.
 
 ---
 
 ## Folder Structure
 
 ```
-trimora/
+openshorts/
+│
+├── app.py                           # FastAPI web server
+├── main.py                          # Standalone CLI pipeline (legacy)
+├── editor.py                        # AI video effects (Gemini)
+├── subtitles.py                     # SRT + ASS subtitle generation
+├── hooks.py                         # Hook text overlay rendering
 │
 ├── engine/                          # Core video intelligence pipeline
 │   ├── __init__.py
 │   ├── config.py                    # 14-section dataclass config
-│   ├── pipeline.py                  # 16-stage orchestrator with resume
+│   ├── pipeline.py                  # 14-stage orchestrator with resume
 │   ├── smoke_test.py                # Integration smoke test
 │   │
 │   ├── audio/                       # Audio extraction & analysis
-│   │   ├── extractor.py             # FFmpeg WAV extraction
+│   │   ├── extractor.py             # FFmpeg Opus extraction
 │   │   ├── quality.py               # SNR, speech rate, volume
 │   │   └── chunker.py               # Overlap chunking (pydub)
 │   │
@@ -350,7 +292,8 @@ trimora/
 │   │   └── language.py              # Language detection
 │   │
 │   ├── segmentation/                # Atomic segment splitting
-│   │   └── segmenter.py             # Punctuation + time + merge
+│   │   ├── segmenter.py             # Punctuation + time + merge
+│   │   └── test_debug.py / test_debug2.py
 │   │
 │   ├── features/                    # Content feature extraction
 │   │   ├── sentiment.py             # VADER compound score
@@ -381,7 +324,7 @@ trimora/
 │   │   └── rule_engine.py           # 6 hard filter validation
 │   │
 │   ├── llm/                         # LLM teacher integration
-│   │   ├── teacher.py               # Groq/Gemini API wrappers
+│   │   ├── teacher.py               # Groq API wrappers
 │   │   ├── prompts.py               # 3 prompt templates
 │   │   └── label_schemas.py         # Output dataclasses
 │   │
@@ -408,26 +351,26 @@ trimora/
 │       ├── models.py                # 18+ dataclasses
 │       ├── storage.py               # SQLite (14 tables)
 │       ├── migrations.py            # v1-v5 schema migrations
-│       └── local_store.py           # JSON file per video
-│
-├── app.py                           # FastAPI server (Trimora.app)
-├── main.py                          # Standalone CLI pipeline
-├── editor.py                        # AI video effects (Gemini)
-├── hooks.py                         # Text overlay rendering
-├── subtitles.py                     # SRT + ASS subtitle generation
+│       ├── local_store.py           # JSON file per video
+│       └── store/                   # Runtime data (SQLite DB, per-video state)
 │
 ├── dashboard/                       # React frontend
 │   ├── src/
 │   │   ├── App.jsx                  # Main app component
+│   │   ├── App.css
+│   │   ├── index.css                # Tailwind directives
+│   │   ├── main.jsx                 # Entry point
 │   │   ├── Landing.jsx              # Marketing landing page
 │   │   ├── Legal.jsx                # Terms & Privacy
-│   │   ├── main.jsx                 # Root with hash routing
+│   │   ├── config.js                # API_BASE_URL configuration
+│   │   │
 │   │   ├── components/
-│   │   │   ├── KeyInput.jsx         # API key manager
-│   │   │   ├── MediaInput.jsx       # YouTube/upload input
-│   │   │   ├── ResultCard.jsx       # Clip display
-│   │   │   ├── HookModal.jsx        # Text overlay config
-│   │   │   └── ProcessingAnimation.jsx  # Animated processing
+│   │   │   ├── KeyInput.jsx         # Groq API key input
+│   │   │   ├── MediaInput.jsx       # YouTube URL / file upload + mode toggle
+│   │   │   ├── ResultCard.jsx       # Clip display with edit/download
+│   │   │   ├── HookModal.jsx        # Hook text overlay config
+│   │   │   └── ProcessingAnimation.jsx  # Animated processing preview
+│   │   │
 │   │   ├── remotion/                # Remotion compositions
 │   │   │   ├── compositions/
 │   │   │   │   ├── ShortVideo.tsx   # Main composition
@@ -438,18 +381,115 @@ trimora/
 │   │   │       ├── types.ts         # TypeScript interfaces
 │   │   │       ├── fonts.ts         # Font management
 │   │   │       └── captions.ts      # Caption block grouping
+│   │   │
 │   │   └── lib/
 │   │       └── renderInBrowser.js   # Remotion browser render
+│   │
 │   └── package.json
 │
-├── docker-compose.yml                # 3 services (backend, frontend, renderer)
-├── Dockerfile                        # Multi-stage Python build
-├── requirements.txt                  # Production deps
-├── requirements_engine.txt           # Engine-only deps
-├── engine_config.yaml                # Runtime config overrides
-├── .env.example                      # Environment template
-└── .gitignore
+├── remotion/                        # Standalone Remotion compositions
+├── render-service/                  # Node.js Remotion rendering server (Express, port 3100)
+│
+├── ffmpeg/bin/                      # Local FFmpeg/FFprobe/FFplay binaries
+├── fonts/                           # NotoSerif-Bold.ttf for hook overlays
+├── uploads/                         # Uploaded video files
+├── output/                          # Generated clip output (per-job UUID directories)
+├── recordings/                      # Screen recordings (dev)
+├── screenshots/                     # Demo screenshots
+│
+├── start.bat                        # One-click Windows launcher
+├── install-ffmpeg.ps1              # Auto-downloads FFmpeg for Windows
+├── engine_config.yaml               # Runtime config overrides
+├── requirements.txt                 # Production deps
+├── requirements_engine.txt          # Engine-only deps
+├── Dockerfile                       # Multi-stage Python build
+├── docker-compose.yml               # 3 services (backend, frontend, renderer)
+├── .env.example                     # Environment template
+├── .gitignore
+└── LICENSE                          # MIT License
 ```
+
+---
+
+## API Endpoints
+
+All endpoints served by `app.py` (FastAPI on port 8000).
+
+### Processing
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/engine/process` | Submit video/URL for engine pipeline processing |
+| POST | `/api/process` | Legacy processing endpoint (also routes to engine) |
+| GET | `/api/status/{job_id}` | Poll job status, logs, and results |
+| GET | `/api/config` | Returns `{"youtubeUrlEnabled": bool}` |
+| GET | `/api/health` | Health check `{"status": "ok"}` |
+
+**`/api/engine/process` parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file` | File | Video file upload (alternative to URL) |
+| `url` | string | YouTube URL (alternative to file) |
+| `acknowledged` | boolean | Must be `true` — confirms content ownership |
+| `category` | string | Video category (general / tech / business / etc.) |
+| `mode` | string | `"full"` (default) — full pipeline, `"transcript"` — transcribe only |
+
+**Headers:** `X-Groq-Key` (required), `X-Gemini-Key` (optional, for AI editing)
+
+### Clip Post-Processing
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/edit` | AI video effects via Gemini. Requires `job_id`, `clip_index`, `X-Gemini-Key` |
+| GET | `/api/clip/{job_id}/{clip_index}/transcript` | Returns clip captions & duration |
+| POST | `/api/subtitle` | Burns SRT subtitles into a clip (position, font, color, opacity configurable) |
+| POST | `/api/hook` | Adds styled text hook overlay to a clip |
+
+### Static Files
+
+| Path | Description |
+|------|-------------|
+| `/videos/{job_id}/{filename}` | Served from `output/` directory |
+
+---
+
+## Internal Clip Processing
+
+### `_cut_and_convert_clip(input_path, output_path, start, end)`
+
+Uses FFmpeg to cut a segment and convert to 9:16 with a blurred background:
+
+```
+Filter chain:
+1. Scale to 1080x1920 (force_original_aspect_ratio=increase)
+2. Crop to 1080x1920
+3. Apply boxblur=30:5
+4. Scale to 1080x1920 (force_original_aspect_ratio=decrease)
+5. Overlay centered content on blurred background
+6. Encode with libx264, preset=fast, crf=23
+7. Audio: aac 128k (if source has audio)
+```
+
+### `_transcribe_only(input_path, groq_key)`
+
+Used in `mode="transcript"`:
+1. Extract audio to Opus via FFmpeg
+2. Send to Groq Whisper large-v3
+3. Return `{transcript, segments}` with word-level timing
+
+### FFmpeg Auto-Detection
+
+On startup, `app.py` searches for FFmpeg in:
+- `ffmpeg/bin/` (project-local)
+- `C:\ffmpeg\bin`
+- `C:\Program Files\ffmpeg\bin`
+
+First found location is prepended to `PATH`.
+
+### YouTube Download
+
+Uses yt-dlp with multi-client extractor args (`tv_embed`, `android`, `mweb`, `web`) and `player_skip` to bypass bot detection. Downloads best video+audio and saves as MP4.
 
 ---
 
@@ -459,23 +499,6 @@ trimora/
 
 All 6 must pass for a clip to be accepted:
 
-```mermaid
-flowchart LR
-    CLIP[Complete Clip] --> DUR{Duration<br/>45 to 90 s?}
-    DUR -- Yes --> HOOK{Hook<br/>under 8 s?}
-    HOOK -- Yes --> CURIO{Has<br/>Curiosity?}
-    CURIO -- Yes --> VALUE{Has Practicality<br/>or Emotion?}
-    VALUE -- Yes --> SPEAKER{Speaker<br/>Changes at most 2?}
-    SPEAKER -- Yes --> CONTEXT{No Context<br/>Gaps?}
-    CONTEXT -- Yes --> ACCEPT[Accepted]
-    DUR -- No --> REJ[Rejected]
-    HOOK -- No --> REJ
-    CURIO -- No --> REJ
-    VALUE -- No --> REJ
-    SPEAKER -- No --> REJ
-    CONTEXT -- No --> REJ
-```
-
 | Rule | Description | Config |
 |------|-------------|--------|
 | `total_duration_45_to_90` | Sum of all segment durations in [45, 90]s | `CLIP_MIN_DURATION` / `CLIP_MAX_DURATION` |
@@ -483,7 +506,7 @@ flowchart LR
 | `has_curiosity` | ≥1 segment with curiosity pattern | Pattern list |
 | `has_practicality_or_emotion` | ≥1 practicality pattern OR \|sentiment\| > 0.3 | Pattern list |
 | `max_2_speaker_changes` | ≤2 speaker transitions | Hardcoded |
-| `no_context_gaps` | No context-reference phrases (e.g. "as I said") | Regex list |
+| `no_context_gaps` | No context-reference phrases ("as I said") | Regex list |
 
 ### Hook Scoring Rules
 
@@ -496,23 +519,10 @@ flowchart LR
 | `contrast` | 15 | Has but / however / surprisingly pattern |
 | `energy_escalation` | +25 (bonus) | High volume + high speech rate combined |
 
-### Ending Scoring Rules
-
-| Rule | Weight | Condition |
-|------|--------|-----------|
-| `ENDING_POSITIVE` | 25 | Sentiment > 0.2 |
-| `ENDING_TAKEAWAY` | 30 | Has key_lesson / action / point / here_is pattern |
-| `ENDING_SUMMARY` | 20 | Has finally / so / conclusion pattern |
-| `ENDING_DURATION_FIT` | 15 | 5–10 seconds |
-| `ENDING_RECENCY` | 20 | Position > 70% of video |
-| `ENDING_PRACTICALITY` | 25 | Has steps / lesson / framework pattern |
-| `ENDING_RELATABLE` | 10 | Has personal pattern |
-| `ENDING_RESOLUTION_BONUS` | 30 | Positive + takeaway + personal combined |
-
 ### 73 Regex Patterns (8 Categories)
 
-| Category | Patterns | Examples |
-|----------|----------|----------|
+| Category | Count | Examples |
+|----------|-------|----------|
 | `curiosity` | 7 | what_if, question, biggest, unknown, imagine |
 | `story` | 8 | then, after, before, suddenly, finally |
 | `practicality` | 7 | steps, framework, tip, rule, lesson |
@@ -526,45 +536,25 @@ flowchart LR
 
 ## Knowledge Graph
 
-The engine maintains **two parallel graph systems** for relationship tracking:
+The engine maintains **two parallel graph systems**:
 
 ### Per-Video Knowledge Graph (`graph/knowledge_graph.py`)
 
-Uses `networkx.DiGraph` to model relationships between segments within a single video:
+Uses `networkx.DiGraph` with typed, weighted edges:
 
-```mermaid
-flowchart LR
-    subgraph Video["Single Video"]
-        S1[Segment 1<br/>What if I told you]
-        S2[Segment 2<br/>I spent 10 years]
-        S3[Segment 3<br/>Heres the thing]
-        S4[Segment 4<br/>The biggest mistake]
-
-        S1 -- "follows 1.0" --> S2
-        S1 -- "explains 0.8" --> S3
-        S2 -- "contrasts 0.85" --> S4
-        S3 -- "concludes 0.75" --> S4
-    end
-```
+| Edge Type | Detection | Weight Range |
+|-----------|-----------|--------------|
+| `follows` | Temporal adjacency | 1.0 |
+| `explains` | Shared keywords + explanation regex | 0.7–0.9 |
+| `contrasts` | Sentiment delta > 0.3 + contrast regex | 0.7–0.9 |
+| `concludes` | Position > 50% + conclusion regex | 0.6–0.8 |
+| `supports` | Shared keywords + support regex | 0.5–0.7 |
 
 ### Global Knowledge Graph (`knowledge/global_graph.py`)
 
-Cross-video pattern learning for node-type → node-type transitions. Tracks averages for watch time, saves, shares, and emotion:
-
-```mermaid
-flowchart LR
-    subgraph CrossVideo["Across All Videos"]
-        CURIOSITY[Curiosity Node] --> EXPLAINS{edge:<br/>avg_watch_time<br/>avg_saves<br/>avg_shares}
-        EXPLAINS --> STORY[Story Node]
-        EXPLAINS --> PRACTICAL[Practicality Node]
-        EXPLAINS --> CONTRAST[Contrast Node]
-        STORY --> CONCLUDES --> TAKEAWAY[Takeaway Node]
-    end
-```
+Cross-video pattern learning tracking average watch time, saves, shares, and emotion for node-type → node-type transitions.
 
 ### Context Database (`knowledge/context_db.py`)
-
-Tracks which segments need context vs. provide it:
 
 | Context Type | Expression | Standalone Probability |
 |--------------|------------|----------------------|
@@ -575,8 +565,6 @@ Tracks which segments need context vs. provide it:
 ---
 
 ## Pattern Intelligence
-
-The pattern system discovers **recurring node-type sequences** across clips and learns which structures perform best.
 
 ### Pattern Discovery
 
@@ -593,55 +581,26 @@ flowchart LR
     MATCH --> EVOLVE[PatternEvolution<br/>versioned variants]
 ```
 
-### Pattern Versions & Evolution
-
-```mermaid
-flowchart LR
-    P1[Pattern v1<br/>Q→S→F→L<br/>confidence: 0.50] --> P2[Pattern v2<br/>Q→S→F→L→T<br/>confidence: 0.72]
-    P2 --> P3[Pattern v3<br/>Q→S→F→L→T<br/>confidence: 0.85]
-    P3 -- "supersede on new_data" --> P4[Pattern v4<br/>Q→S→F→L→T→A<br/>confidence: 0.91]
-```
-
 ### Meta Pattern Graph
 
-Tracks preferred structures by video **category** (e.g., business, tech, entertainment, education):
+Tracks preferred structures by video **category**:
 
-```mermaid
-flowchart LR
-    BUSINESS[Business Videos] --> PREF1[Preferred: <br/>Curiosity → Story → Practicality → Takeaway]
-    TECH[Tech Videos] --> PREF2[Preferred: <br/>Problem → Explanation → Solution → CTA]
-    EDUCATION[Education] --> PREF3[Preferred: <br/>Question → Story → Lesson → Summary]
-    ENTERTAIN[Entertainment] --> PREF4[Preferred: <br/>Hook → Build → Punchline → Reaction]
-```
-
-### Pattern Storage (SQLite Tables)
-
-| Table | Purpose |
-|-------|---------|
-| `pattern_nodes` | Node-level stats per pattern occurrence |
-| `pattern_edges` | Edge weights and transition probabilities |
-| `meta_patterns` | Category-specific pattern preferences |
+| Category | Preferred Structure |
+|----------|-------------------|
+| Business | Curiosity → Story → Practicality → Takeaway |
+| Tech | Problem → Explanation → Solution → CTA |
+| Education | Question → Story → Lesson → Summary |
+| Entertainment | Hook → Build → Punchline → Reaction |
 
 ---
 
 ## Confidence & Routing
 
-The engine uses a **cascading confidence system** to decide how to process each stage — minimizing API calls while maintaining quality.
+### Cascade
 
-### Confidence Propagation
-
-```mermaid
-flowchart LR
-    T[Transcription 0.98] --> S[Segmentation 0.97]
-    S --> F[Features 0.97]
-    F --> G[Graph 0.96]
-    G --> R[Rules 0.95]
-    R --> SC[Scoring 0.94]
-    SC --> L[LLM 0.93]
-    L --> TOTAL[Final Confidence<br/>product of all stages]
 ```
-
-Formula: `confidence_final = ∏(stage_reliability[i])` for all completed stages.
+confidence_final = ∏(stage_reliability[i]) for all completed stages
+```
 
 ### Adaptive Routing Matrix
 
@@ -653,32 +612,6 @@ Formula: `confidence_final = ∏(stage_reliability[i])` for all completed stages
 | 0.30–0.60 | **LLM Teacher** | Fall back to LLM |
 | < 0.30 | **Human Review** | Too uncertain |
 
-```mermaid
-flowchart LR
-    CONF[Confidence Score] --> DECIDE{Threshold}
-    DECIDE -- "0.90 and above" --> LOCAL[Local Model<br/>fast, 0-cost]
-    DECIDE -- "0.75 to 0.90" --> PATTERN[Pattern Match<br/>fast, 0-cost]
-    DECIDE -- "0.60 to 0.75" --> RULE[Rule Engine<br/>default path]
-    DECIDE -- "0.30 to 0.60" --> LLM[LLM Teacher<br/>API cost]
-    DECIDE -- "below 0.30" --> HUMAN[Human Review<br/>highest touch]
-```
-
-### Feature Provenance
-
-Each feature records its origin for debugging and confidence calibration:
-
-```mermaid
-flowchart LR
-    SEGMENT[Segment] --> FEATURES{Features}
-    FEATURES --> SENT[Sentiment<br/>VADER<br/>source: vaderSentiment]
-    FEATURES --> PAT[Patterns<br/>73 regex rules<br/>source: patterns.py]
-    FEATURES --> AUDIO[Audio<br/>librosa features<br/>source: audio_features.py]
-    FEATURES --> STRUCT[Structural<br/>position + recency<br/>source: structural.py]
-    FEATURES --> LLM[LLM Labels<br/>Groq/Gemini<br/>source: teacher.py]
-```
-
-Stored in `feature_provenance` table for debugging and feature engineering.
-
 ---
 
 ## Scoring
@@ -689,193 +622,60 @@ Stored in `feature_provenance` table for debugging and feature engineering.
 Total = 0.35 × hook_score + 0.25 × body_score + 0.20 × ending_score + 0.15 × flow_score + 0.05 × practicality + 0.05 × uniqueness
 ```
 
-### Hook Score (0.35 weight)
+### Hook Score (0.35)
 
-```mermaid
-flowchart LR
-    H1["0.40 x has_curiosity<br/>(what_if, question, biggest)"]
-    H2["0.30 x speech_rate / 3.0<br/>(energy)"]
-    H3["0.30 x 1 - abs(dur - 5) / 10<br/>(brevity)"]
-    H1 --> H_TOTAL["Hook Score"]
-    H2 --> H_TOTAL
-    H3 --> H_TOTAL
-```
+- 0.40 × has_curiosity (what_if, question, biggest)
+- 0.30 × speech_rate / 3.0 (energy)
+- 0.30 × 1 - abs(dur - 5) / 10 (brevity)
 
-### Body Score (0.25 weight, averaged across all body segments)
+### Body Score (0.25, averaged)
 
-```mermaid
-flowchart LR
-    B1["0.30 x has_personal<br/>(relatability)"]
-    B2["0.30 x abs(sentiment) over 0.2<br/>(emotional weight)"]
-    B3["0.40 x duration under 12s<br/>(pacing)"]
-    B1 --> B_SEG[Per-Segment Score]
-    B2 --> B_SEG
-    B3 --> B_SEG
-    B_SEG --> B_AVG[Average to Body Score]
-```
+- 0.30 × has_personal (relatability)
+- 0.30 × abs(sentiment) over 0.2 (emotional weight)
+- 0.40 × duration under 12s (pacing)
 
-### Ending Score (0.20 weight)
+### Ending Score (0.20)
 
-```mermaid
-flowchart LR
-    E1["0.30 x sentiment<br/>(positive resolution)"]
-    E2["0.40 x has_takeaway<br/>(lesson or key lesson)"]
-    E3["0.30 x 1 - abs(dur - 7) / 10<br/>(length fit)"]
-    E1 --> E_TOTAL["Ending Score"]
-    E2 --> E_TOTAL
-    E3 --> E_TOTAL
-```
+- 0.30 × sentiment (positive resolution)
+- 0.40 × has_takeaway (lesson or key lesson)
+- 0.30 × 1 - abs(dur - 7) / 10 (length fit)
 
-### Flow Score (0.15 weight)
+### Flow Score (0.15)
 
-```mermaid
-flowchart LR
-    F1["0.30 x hook to body gap under 2s<br/>(tight transition)"]
-    F2["0.30 x body to ending gap under 3s<br/>(smooth segue)"]
-    F3["0.40 x has_emotional_arc<br/>(tension arc)"]
-    F1 --> F_TOTAL["Flow Score"]
-    F2 --> F_TOTAL
-    F3 --> F_TOTAL
-```
+- 0.30 × hook to body gap under 2s (tight transition)
+- 0.30 × body to ending gap under 3s (smooth segue)
+- 0.40 × has_emotional_arc (tension arc)
 
-### Uniqueness Score (0.05 weight)
+### Uniqueness Score (0.05)
 
 TF-IDF based: measures how rare the clip's words are within the full transcript.
-
-```mermaid
-flowchart LR
-    TRANS[Full Transcript] --> FREQ[Word Frequencies<br/>Counter]
-    CLIP[Clip Text] --> WORDS[Clip Words]
-    FREQ --> IDF[IDF per word<br/>log N over freq]
-    WORDS --> IDF
-    IDF --> AVG[Average IDF]
-    AVG --> UNIQ[avg_idf over 3 capped 1.0]
-```
 
 ---
 
 ## LLM Teacher
 
-The LLM teacher can use either **Groq** or **Gemini** (configured via `PROVIDER` in config). It provides three labeling operations:
+The LLM teacher uses **Groq** (llama-3.3-70b-versatile by default). Configured via `engine_config.yaml`:
 
-### Segment Labeling
+```yaml
+llm:
+  use_llm: true            # Disabled by default in code
+  provider: groq
+  groq_model: llama-3.3-70b-versatile
+```
 
-14 analysis dimensions per segment:
+Three labeling operations:
 
-| Dimension | Description |
-|-----------|-------------|
-| `is_hook` | Could this be a hook? |
-| `hook_type` | curiosity / problem / energy / contrast |
-| `emotional_tone` | Positive / Negative / Neutral / Mixed |
-| `emotional_intensity` | 0.0–1.0 |
-| `narrative_role` | hook / build-up / climax / resolution / filler |
-| `practical_value` | actionable advice / tip / lesson? |
-| `target_audience` | beginner / intermediate / expert / general |
-| `context_dependency` | standalone / needs_context / provides_context |
-| `shareability` | 0.0–1.0 |
-| `key_topics` | List of topic keywords |
-| `speaker_intent` | inform / persuade / entertain / inspire |
-| `viral_potential` | low / medium / high |
-| `best_platform` | tiktok / reels / shorts / any |
-| `suggested_hook_text` | Short attention-grabbing text |
+### Segment Labeling (14 dimensions)
 
-### Candidate Labeling
+is_hook, hook_type, emotional_tone, emotional_intensity, narrative_role, practical_value, target_audience, context_dependency, shareability, key_topics, speaker_intent, viral_potential, best_platform, suggested_hook_text
 
-11 dimensions for scoring candidate clips:
+### Candidate Labeling (11 dimensions)
 
-| Dimension | Description |
-|-----------|-------------|
-| `hook_quality` | 0.0–1.0 |
-| `body_coherence` | 0.0–1.0 |
-| `ending_quality` | 0.0–1.0 |
-| `emotional_arc` | 0.0–1.0 |
-| `context_completeness` | 0.0–1.0 |
-| `practical_value` | 0.0–1.0 |
-| `entertainment_value` | 0.0–1.0 |
-| `shareability` | 0.0–1.0 |
-| `platform_fit` | tiktok / reels / shorts / any |
-| `suggested_hook_text` | Hook overlay suggestion |
-| `estimated_viral_score` | 0.0–1.0 |
+hook_quality, body_coherence, ending_quality, emotional_arc, context_completeness, practical_value, entertainment_value, shareability, platform_fit, suggested_hook_text, estimated_viral_score
 
 ### Rejection Analysis
 
-Why a clip was rejected — for continuous improvement via the `FailureStore`.
-
----
-
-## Quick Start (Engine)
-
-```bash
-# 1. Clone
-git clone https://github.com/your-username/Trimora.git
-cd Trimora
-
-# 2. Install engine dependencies
-pip install -r requirements_engine.txt
-
-# 3. Set your API key
-set GROQ_API_KEY=gsk_your_key_here
-
-# 4. Run smoke test
-python -c "exec(open('engine/smoke_test.py').read())"
-
-# 5. Run full integration test
-python -c "
-import os; os.environ['GROQ_API_KEY'] = 'test'
-from engine.config import get_config
-cfg = get_config()
-cfg.llm.USE_LLM = False
-
-# Import and run pipeline components
-from engine.segmentation.segmenter import split_into_atomic_segments
-from engine.features.sentiment import compute_sentiment
-from engine.features.patterns import match_patterns
-from engine.graph.knowledge_graph import KnowledgeGraph
-from engine.graph.relationships import detect_relationships
-from engine.rules.hook_rules import find_hook_candidates
-from engine.scoring.candidate_generator import generate_candidates
-from engine.scoring.rule_engine import validate_clip
-from engine.scoring.scorer import make_valid_clip, score_clip
-
-# ... see engine/smoke_test.py for full example
-"
-```
-
-### Using the Pipeline Orchestrator
-
-```python
-from engine.pipeline import Pipeline
-
-pipeline = Pipeline(
-    video_path="path/to/video.mp4",
-    video_id="my-video-001"
-)
-result = pipeline.run()
-print(f"Generated {len(result['clips'])} clips")
-```
-
----
-
-## Quick Start (Docker)
-
-```bash
-# 1. Configure
-cp .env.example .env
-
-# 2. Launch all services
-docker compose up --build
-
-# 3. Open dashboard
-# Navigate to http://localhost:5175
-```
-
-Services:
-
-| Service | Port | Description |
-|---------|------|-------------|
-| Backend | `8000` | FastAPI server |
-| Frontend | `5175` | Vite React dashboard |
-| Renderer | `3100` | Remotion video renderer |
+Records why clips were rejected for continuous improvement via `FailureStore`.
 
 ---
 
@@ -885,28 +685,30 @@ Services:
 
 | Section | Class | Key Parameters |
 |---------|-------|----------------|
-| Audio | `AudioConfig` | sample_rate, channels, format |
-| Quality | `QualityConfig` | SNR threshold, speech rate threshold |
-| Chunking | `ChunkingConfig` | chunk size, overlap, fade |
-| Transcription | `TranscriptionConfig` | groq_model, temperature, retry |
-| Alignment | `AlignmentConfig` | whisperx device, batch size |
-| Segmentation | `SegmentationConfig` | max_segment_duration (8s), min (2s) |
-| Scoring | `ScoringConfig` | clip min/max duration, weights |
-| Rule Scores | `RuleScoreConfig` | per-rule weights for hooks/body/ending |
+| Audio | `AudioConfig` | sample_rate=16000, channels=1, format=opus, ffmpeg_audio_codec=libopus, audio_bitrate=12k |
+| Quality | `QualityConfig` | snr_strict_threshold=10.0, speech_rate_high_threshold=3.5 |
+| Chunking | `ChunkingConfig` | chunk_size=180s, overlap=5s |
+| Transcription | `TranscriptionConfig` | groq_model=whisper-large-v3, temperature=0.0 |
+| Alignment | `AlignmentConfig` | whisperx_device=cpu, batch_size=4 |
+| Segmentation | `SegmentationConfig` | max_segment_duration=8s, min=2s |
+| Scoring | `ScoringConfig` | clip_min=45s, clip_max=90s, hook_min_score=50 |
+| Rule Scores | `RuleScoreConfig` | per-rule weights |
 | Graph | `GraphConfig` | edge weights, temporal window |
 | Confidence | `ConfidenceConfig` | stage reliability values |
-| Pattern | `PatternConfig` | decay rate, half-life, thresholds |
-| Storage | `StorageConfig` | store root paths |
-| LLM | `LLMConfig` | provider, model, temperature |
-| Pipeline | `PipelineConfig` | concurrency, resume, cleanup |
+| Pattern | `PatternConfig` | decay_rate, half_life_days=365, thresholds |
+| Storage | `StorageConfig` | store_root |
+| LLM | `LLMConfig` | use_llm=false, provider=groq, groq_model=llama-3.3-70b-versatile |
+| Pipeline | `PipelineConfig` | parallel_max_workers=4, resume_enabled=true, auto_cleanup_hours=1 |
 
 ### `engine_config.yaml` (Runtime Overrides)
 
 ```yaml
-# engine_config.yaml — overrides config.py defaults at runtime
+audio:
+  format: opus
+
 llm:
   use_llm: true
-  provider: groq          # "groq" or "gemini"
+  provider: groq
   groq_model: llama-3.3-70b-versatile
 
 scoring:
@@ -915,7 +717,7 @@ scoring:
 
 pipeline:
   resume_enabled: true
-  max_concurrent_jobs: 5
+  parallel_max_workers: 4
 ```
 
 Load at runtime:
@@ -925,68 +727,21 @@ from engine.config import load_config_from_yaml
 cfg = load_config_from_yaml("engine_config.yaml")
 ```
 
-## API Endpoints
-
-### Legacy App (FastAPI — `app.py`)
-
-| Method | Route | Purpose |
-|--------|-------|---------|
-| POST | `/api/process` | Submit video for processing |
-| GET | `/api/status/{job_id}` | Poll job status & logs |
-| POST | `/api/edit` | AI video effects (Gemini) |
-| POST | `/api/subtitle` | Generate & apply subtitles |
-| POST | `/api/hook` | Add hook text overlays |
-| POST | `/api/translate` | AI voice dubbing (ElevenLabs) |
-| GET | `/api/translate/languages` | List dubbing languages |
-| POST | `/api/social/post` | Post to social media |
-
-### Engine Pipeline
-
-The engine is a **Python library** — you call it directly or integrate via the pipeline orchestrator:
-
-```python
-from engine.pipeline import Pipeline
-
-pipeline = Pipeline(
-    video_path="input.mp4",
-    video_id="unique-id",
-    groq_api_key="gsk_...",
-    whisperx_device="cpu"
-)
-result = pipeline.run()
-# result contains: clips, segments, patterns, confidence_score
-```
-
 ---
 
 ## Frontend Dashboard
 
 The React dashboard (`dashboard/`) provides:
 
-- **Clip Generator**: Upload long videos → get short clips
-- **AI Agent**: Configure the clip generation pipeline
-- **Settings**: Manage API keys (stored encrypted in localStorage)
-- **Video Processing**: Real-time animated processing preview
+- **Clip Generator**: Upload long videos / YouTube URL → get short clips
+- **Processing Mode Toggle**: Full Pipeline (transcribe + score + clip) or Transcript Only
+- **Transcript View**: Readable transcript with clickable timestamps for each segment
+- **Settings**: Groq API key management (stored in localStorage)
+- **Video Processing**: Animated processing preview with real-time logs
 - **Clip Results**: Per-clip player with edit/download/hook overlay tools
 - **Remotion Rendering**: Browser-based video compositing with subtitles, effects, and hook overlays
 
-All API keys are encrypted client-side and never stored on the server.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| **Engine Language** | Python 3.11 |
-| **Engine Libraries** | networkx, librosa, pydub, vaderSentiment, sentence-transformers, aiosqlite |
-| **Transcription** | Groq Whisper large-v3, WhisperX alignment |
-| **LLM** | Groq (llama-3.3-70b), Gemini (via google-genai) |
-| **Backend** | FastAPI, uvicorn, yt-dlp, FFmpeg |
-| **Video Processing** | opencv-python, mediapipe, ultralytics (YOLOv8) |
-| **Frontend** | React 18, Vite 4, Tailwind CSS 3.4 |
-| **Video Rendering** | Remotion 4.0 |
-| **Infrastructure** | Docker + Docker Compose, AWS S3 |
+The dashboard requires only a **Groq API key** (Gemini key is optional, used only for AI editing features).
 
 ---
 
@@ -997,44 +752,44 @@ All API keys are encrypted client-side and never stored on the server.
 | Variable | Description |
 |----------|-------------|
 | `GROQ_API_KEY` | Groq API key (transcription + LLM) |
+| `GEMINI_API_KEY` | Google Gemini API key (AI editing) |
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `AWS_REGION` | AWS region |
 | `AWS_S3_BUCKET` | Private bucket for clip backup |
-| `MAX_CONCURRENT_JOBS` | Concurrent processing limit (default: 5) |
+| `AWS_S3_PUBLIC_BUCKET` | Public bucket for shared clips |
 
-### Client-side (encrypted in localStorage)
+### Client-side (localStorage)
 
-| Key | Description | Required For |
-|-----|-------------|-------------|
-| `GEMINI_API_KEY` | Google Gemini | AI features in web app |
-| `ELEVENLABS_API_KEY` | ElevenLabs | Voice dubbing |
-| `UPLOAD_POST_API_KEY` | Upload-Post | Social publishing |
-| `FAL_KEY` | fal.ai | AI Shorts generation |
+| Key | Required For |
+|-----|-------------|
+| `groq_key` | Processing videos (required) |
+| `gemini_key` | AI editing features (optional) |
 
 ---
 
 ## Features
 
-### Clip Generator (Legacy)
-- **Viral Moment Detection**: Gemini AI analyzes transcripts + scene boundaries
-- **Smart 9:16 Cropping**: TRACK mode (MediaPipe + YOLOv8) or GENERAL mode (blurred background)
-- **Auto Subtitles**: faster-whisper with word-level timing, styled/burned in
-- **AI Voice Dubbing**: ElevenLabs for 30+ languages
-- **Hook Text Overlays**: Attention-grabbing text with animated entrance
-- **AI Video Effects**: Gemini-generated FFmpeg filters
-
 ### Engine Pipeline
 - **Rules-First Architecture**: 6 validation gates, 20+ scoring rules — minimizes LLM calls
+- **Parallel Transcription**: ThreadPoolExecutor for concurrent Groq API calls
 - **Multi-Body Clips**: 7–18 segments per clip for proper 45–90s duration
 - **Cascading Confidence**: 5-level routing (local → pattern → rule → LLM → human)
 - **Pattern Intelligence**: Discovers recurring segment sequences across videos
 - **Global Learning**: Cross-video knowledge graph improves over time
 - **Resumable Pipeline**: Per-video `state.json` allows interrupted runs to skip completed stages
 - **Rich SQLite Storage**: 14 tables for segments, patterns, decisions, words, relationships
-- **Dual-Mode LLM**: Groq (default) or Gemini backend configurable at runtime
 - **TF-IDF Uniqueness Scoring**: Rare words within the transcript boost clip score
 - **Decision Tracking**: Every accepted/rejected candidate recorded for analytics
+- **Dual Mode**: Full pipeline or transcript-only mode
+
+### Clip Processing
+- **Smart 9:16 Conversion**: Blurred background + centered content via FFmpeg filter graph
+- **Auto Subtitles**: Groq Whisper transcription with SRT/ASS subtitle burning
+- **Hook Text Overlays**: Attention-grabbing text with animated entrance (PIL + FFmpeg)
+- **AI Video Effects**: Gemini-generated FFmpeg filters
+- **YouTube Download**: yt-dlp with anti-bot extractor config
+- **FFmpeg Auto-Detect**: Searches multiple locations for FFmpeg binaries
 
 ---
 
@@ -1050,7 +805,7 @@ All API keys are encrypted client-side and never stored on the server.
 
 ## Contributing
 
-Contributions are welcome! Areas to contribute:
+Contributions welcome! Areas to contribute:
 
 - **New LLM providers** (OpenAI, Anthropic, local models)
 - **Additional pattern categories** for `features/patterns.py`
@@ -1058,19 +813,18 @@ Contributions are welcome! Areas to contribute:
 - **Add more validation rules** in `scoring/rule_engine.py`
 - **Multi-language support** in transcription and segmentation
 - **Web UI** for engine pipeline configuration and monitoring
-- **Tests** — the engine needs comprehensive unit and integration tests
+- **Tests** — comprehensive unit and integration tests needed
 - **Performance** — optimize WhisperX alignment and audio feature extraction
 
 ```bash
-# Before submitting a PR, ensure:
+# Before submitting a PR:
 python -m py_compile engine/pipeline.py
 python -m py_compile engine/config.py
-# Run smoke test
-python -c "exec(open('engine/smoke_test.py').read())"
+python -m py_compile app.py
 ```
 
 ---
 
 ## License
 
-MIT License. Trimora is yours to use, modify, and scale.
+MIT License. OpenShorts (Trimora) is yours to use, modify, and scale.
