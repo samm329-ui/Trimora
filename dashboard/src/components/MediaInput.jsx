@@ -5,6 +5,7 @@ import { getApiUrl } from '../config';
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     const [mode, setMode] = useState('url'); // 'url' | 'file'
+    const [processMode, setProcessMode] = useState('full'); // 'full' | 'transcript'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
@@ -25,9 +26,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true });
+            onProcess({ type: 'url', payload: url, acknowledged: true, processMode });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true });
+            onProcess({ type: 'file', payload: file, acknowledged: true, processMode });
         }
     };
 
@@ -112,6 +113,23 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         )}
                     </div>
                 )}
+
+                <div className="flex gap-1 mt-5 bg-white/5 rounded-lg p-1 border border-white/10">
+                    <button
+                        type="button"
+                        onClick={() => setProcessMode('full')}
+                        className={`flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all ${processMode === 'full' ? 'bg-primary/20 text-primary shadow-sm' : 'text-zinc-400 hover:text-white'}`}
+                    >
+                        Full Pipeline
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setProcessMode('transcript')}
+                        className={`flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all ${processMode === 'transcript' ? 'bg-primary/20 text-primary shadow-sm' : 'text-zinc-400 hover:text-white'}`}
+                    >
+                        Transcript Only
+                    </button>
+                </div>
 
                 <label className="flex items-start gap-2 mt-5 text-xs text-zinc-400 cursor-pointer select-none">
                     <input

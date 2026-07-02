@@ -4,7 +4,7 @@ import { getApiUrl } from '../config';
 import HookModal from './HookModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-export default function ResultCard({ clip, index, jobId, geminiApiKey, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, onPlay, onPause }) {
     const videoRef = React.useRef(null);
     const originalVideoUrl = getApiUrl(clip.video_url);
     const [currentVideoUrl, setCurrentVideoUrl] = useState(originalVideoUrl);
@@ -31,10 +31,10 @@ export default function ResultCard({ clip, index, jobId, geminiApiKey, onPlay, o
         setIsEditing(true);
         setEditError(null);
         try {
-            const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
+            const apiKey = localStorage.getItem('gemini_key');
 
             if (!apiKey) {
-                throw new Error("Gemini API Key is missing. Please set it in Settings.");
+                throw new Error("Gemini API Key not available. Auto Edit requires a Gemini key.");
             }
 
             const res = await fetch(getApiUrl('/api/edit'), {

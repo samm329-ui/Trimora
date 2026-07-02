@@ -16,9 +16,7 @@ const pollJob = async (jobId) => {
 };
 
 function App() {
-  const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
   const [groqKey, setGroqKey] = useState(localStorage.getItem('groq_key') || '');
-  const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle');
   const [results, setResults] = useState(null);
@@ -84,10 +82,6 @@ function App() {
   }, [jobId, status, results, activeTab]);
 
   useEffect(() => {
-    if (apiKey) localStorage.setItem('gemini_key', apiKey);
-  }, [apiKey]);
-
-  useEffect(() => {
     if (groqKey) localStorage.setItem('groq_key', groqKey);
   }, [groqKey]);
 
@@ -117,9 +111,15 @@ function App() {
     return () => clearInterval(interval);
   }, [status, jobId]);
 
+  const fmtTime = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
+
   const handleProcess = async (data) => {
-    if (!apiKey) {
-      setShowKeyModal(true);
+    if (!groqKey) {
+      setActiveTab('settings');
       return;
     }
     setStatus('processing');
@@ -128,23 +128,25 @@ function App() {
     setProcessingMedia(data);
 
     try {
-      let body;
-      const headers = { 'X-Gemini-Key': apiKey, 'X-Groq-Key': groqKey };
+      const headers = { 'X-Groq-Key': groqKey };
 
+      const processMode = data.processMode || 'full';
+      let body;
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
+        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged, mode: processMode });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('mode', processMode);
         body = formData;
       }
 
-      const endpoint = groqKey ? '/api/engine/process' : '/api/process';
+      const endpoint = '/api/engine/process';
       const res = await fetch(getApiUrl(endpoint), {
         method: 'POST',
-        headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey, 'X-Groq-Key': groqKey },
+        headers,
         body
       });
 
@@ -167,9 +169,7 @@ function App() {
     localStorage.removeItem(SESSION_KEY);
   };
 
-  const missingKeys = [];
-  if (!apiKey) missingKeys.push('Gemini');
-  if (!groqKey) missingKeys.push('Groq');
+  const missingKeys = !groqKey ? ['Groq'] : [];
 
   const Sidebar = () => (
     <div className="w-20 lg:w-64 bg-surface border-r border-white/5 flex flex-col h-full shrink-0 transition-all duration-300">
@@ -268,7 +268,7 @@ function App() {
                 title="Click to configure your API keys"
               >
                 <AlertTriangle size={12} />
-                {missingKeys.join('/')} API Key{missingKeys.length > 1 ? 's' : ''} Missing
+                Groq API Key Missing
               </button>
             )}
           </div>
@@ -279,8 +279,8 @@ function App() {
             <div className="flex items-center gap-3 text-sm text-amber-200">
               <KeyRound size={16} className="shrink-0 text-amber-400" />
               <div>
-                <span className="font-semibold">Required API key{missingKeys.length > 1 ? 's' : ''} missing.</span>{' '}
-                <span className="text-amber-200/80">Set your {missingKeys.join(' and ')} key{missingKeys.length > 1 ? 's' : ''} to use Trimora.</span>
+                <span className="font-semibold">Groq API key required.</span>{' '}
+                <span className="text-amber-200/80">Set your Groq key to use Trimora.</span>
               </div>
             </div>
             <button
@@ -315,7 +315,6 @@ function App() {
                   <Shield size={12} /> Privacy: keys only live in your browser
                 </div>
               </div>
-              <KeyInput onKeySet={setApiKey} savedKey={apiKey} provider="gemini" />
               <KeyInput onKeySet={setGroqKey} savedKey={groqKey} provider="groq" />
             </div>
           )}
@@ -502,11 +501,20 @@ function App() {
 
               <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} h-full flex flex-col bg-background p-6 transition-all duration-700 ease-in-out`}>
                 <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 shrink-0">
-                  <Sparkles className="text-yellow-400" size={20} />
-                  Generated Shorts
+                  {results?.segments ? (
+                    <FileVideo className="text-cyan-400" size={20} />
+                  ) : (
+                    <Sparkles className="text-yellow-400" size={20} />
+                  )}
+                  {results?.segments ? 'Transcript' : 'Generated Shorts'}
                   {results?.clips?.length > 0 && (
                     <span className="text-xs bg-white/10 text-white px-2 py-0.5 rounded-full ml-auto">
                       {results.clips.length} Clips
+                    </span>
+                  )}
+                  {results?.segments?.length > 0 && (
+                    <span className="text-xs bg-cyan-500/10 text-cyan-400 px-2 py-0.5 rounded-full ml-auto">
+                      {results.segments.length} Segments
                     </span>
                   )}
                   {results?.cost_analysis && (
@@ -517,7 +525,24 @@ function App() {
                 </h2>
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
-                  {results && results.clips && results.clips.length > 0 ? (
+                  {results?.segments?.length > 0 ? (
+                    <div className="pb-10 space-y-1">
+                      {results.segments.map((seg, i) => (
+                        <div
+                          key={i}
+                          onClick={() => handleClipPlay(seg.start)}
+                          className="group flex items-start gap-3 p-3 rounded-lg hover:bg-white/[0.03] cursor-pointer transition-colors border-b border-white/[0.02]"
+                        >
+                          <span className="shrink-0 text-xs font-mono text-cyan-500/70 bg-cyan-500/10 px-2 py-1 rounded mt-0.5 min-w-[64px] text-center">
+                            {fmtTime(seg.start)}
+                          </span>
+                          <span className="text-sm text-zinc-300 group-hover:text-white leading-relaxed transition-colors">
+                            {seg.text}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : results && results.clips && results.clips.length > 0 ? (
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
                       {results.clips.map((clip, i) => (
                         <ResultCard
@@ -525,7 +550,6 @@ function App() {
                           clip={clip}
                           index={i}
                           jobId={jobId}
-                          geminiApiKey={apiKey}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
                         />
@@ -553,58 +577,7 @@ function App() {
 
       </main>
 
-      {showKeyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowKeyModal(false)}>
-          <div className="bg-[#18181b] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white">Gemini API Key Required</h2>
-            <p className="text-sm text-zinc-400">
-              Trimora needs a <strong className="text-zinc-200">Gemini</strong> API key to process videos.
-            </p>
 
-            <div className={`rounded-lg p-4 space-y-2 border ${!apiKey ? 'bg-blue-500/5 border-blue-500/30' : 'bg-white/5 border-white/10 opacity-70'}`}>
-              <p className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
-                {apiKey ? <Check size={12} className="text-green-400" /> : <AlertTriangle size={12} className="text-amber-400" />}
-                Gemini API Key {apiKey && <span className="text-green-400">— set</span>}
-              </p>
-              {!apiKey && (
-                <>
-                  <ol className="text-xs text-zinc-400 space-y-1 list-decimal list-inside">
-                    <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">aistudio.google.com/app/apikey</a></li>
-                    <li>Sign in with your Google account</li>
-                    <li>Click "Create API Key"</li>
-                    <li>Copy the key and paste it below</li>
-                  </ol>
-                  <input
-                    type="text"
-                    placeholder="Paste your Gemini API key here..."
-                    className="w-full bg-black/50 border border-white/20 rounded-lg px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        setApiKey(e.target.value.trim());
-                      }
-                    }}
-                  />
-                </>
-              )}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowKeyModal(false)}
-                className="flex-1 text-sm text-zinc-400 py-2 rounded-lg border border-white/10 hover:bg-white/5 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { setShowKeyModal(false); setActiveTab('settings'); }}
-                className="flex-1 text-sm text-white py-2 rounded-lg bg-blue-600 hover:bg-blue-500 transition-colors font-medium"
-              >
-                Go to Settings
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
