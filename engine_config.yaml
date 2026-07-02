@@ -4,17 +4,11 @@
 audio:
   sample_rate: 16000
   channels: 1
-  format: wav
+  format: opus
 
 quality:
   snr_strict_threshold: 10.0
   speech_rate_high_threshold: 3.5
-
-chunking:
-  chunk_size_default: 30
-  chunk_overlap_default: 2
-  chunk_size_strict: 15
-  chunk_overlap_strict: 3
 
 transcription:
   groq_model: whisper-large-v3
