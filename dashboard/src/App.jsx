@@ -141,7 +141,8 @@ function App() {
         body = formData;
       }
 
-      const res = await fetch(getApiUrl('/api/process'), {
+      const endpoint = groqKey ? '/api/engine/process' : '/api/process';
+      const res = await fetch(getApiUrl(endpoint), {
         method: 'POST',
         headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey, 'X-Groq-Key': groqKey },
         body

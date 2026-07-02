@@ -357,31 +357,31 @@ from subtitles import generate_srt, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
 
 
-class EngineProcessRequest(BaseModel):
-    url: Optional[str] = None
-    category: str = "general"
-    acknowledged: bool = False
-
-
 @app.post("/api/engine/process")
 async def engine_process_endpoint(
-    req: EngineProcessRequest,
     request: Request,
     file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    acknowledged: Optional[str] = Form(None),
+    category: Optional[str] = Form("general"),
 ):
     api_key = request.headers.get("X-Gemini-Key")
     groq_key = request.headers.get("X-Groq-Key") or os.environ.get("GROQ_API_KEY", "")
     if not groq_key:
         raise HTTPException(status_code=400, detail="Groq API key required for engine pipeline")
 
+    ack_flag = str(acknowledged).lower() in ("1", "true", "yes") if acknowledged else False
+
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
         body = await request.json()
-        req = EngineProcessRequest(**body)
+        url = body.get("url")
+        ack_flag = bool(body.get("acknowledged"))
+        category = body.get("category", "general")
 
-    if not req.url and not file:
+    if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
-    if not req.acknowledged:
+    if not ack_flag:
         raise HTTPException(status_code=400, detail="You must confirm you own the content or have rights to process it.")
 
     job_id = str(uuid.uuid4())
@@ -389,7 +389,7 @@ async def engine_process_endpoint(
     os.makedirs(job_output_dir, exist_ok=True)
 
     input_path = None
-    if req.url:
+    if url:
         from yt_dlp import YoutubeDL
         ydl_opts = {
             "format": "bestaudio/best",
@@ -397,7 +397,7 @@ async def engine_process_endpoint(
             "quiet": True,
         }
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.url, download=True)
+            info = ydl.extract_info(url, download=True)
             input_path = os.path.join(job_output_dir, f"{info['id']}.{info['ext']}")
     elif file:
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
@@ -416,7 +416,7 @@ async def engine_process_endpoint(
         'output_dir': job_output_dir,
     }
 
-    asyncio.create_task(_run_engine_job(job_id, input_path, req.category, job_output_dir))
+    asyncio.create_task(_run_engine_job(job_id, input_path, category, job_output_dir))
 
     return {"job_id": job_id, "status": "queued"}
 
