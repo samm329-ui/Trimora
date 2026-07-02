@@ -63,3 +63,6 @@ churchil_queen_vertical_short.gif
 churchil_queen_vertical.gif
 demo-trimora.mp4
 
+
+# Pipeline store output
+engine/data/store/*/state.json
