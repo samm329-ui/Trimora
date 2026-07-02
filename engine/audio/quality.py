@@ -6,7 +6,14 @@ from ..config import get_config
 
 def measure_audio_quality(audio_path: str) -> AudioQuality:
     cfg = get_config().quality
-    y, sr = librosa.load(audio_path, sr=get_config().audio.SAMPLE_RATE)
+    try:
+        y, sr = librosa.load(audio_path, sr=get_config().audio.SAMPLE_RATE)
+    except Exception:
+        return AudioQuality(
+            snr_db=cfg.DEFAULT_SNR_DB,
+            speech_rate=cfg.DEFAULT_SPEECH_RATE,
+            volume_rms=cfg.DEFAULT_VOLUME_RMS
+        )
     duration = librosa.get_duration(y=y, sr=sr)
 
     if duration == 0:
