@@ -1,0 +1,50 @@
+# Runtime overrides for engine/config.py
+# Leave empty to use defaults from config.py
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  format: wav
+
+quality:
+  snr_strict_threshold: 10.0
+  speech_rate_high_threshold: 3.5
+
+chunking:
+  chunk_size_default: 30
+  chunk_overlap_default: 2
+  chunk_size_strict: 15
+  chunk_overlap_strict: 3
+
+transcription:
+  groq_model: whisper-large-v3
+  temperature: 0.0
+
+alignment:
+  whisperx_device: cpu
+  whisperx_batch_size: 4
+
+segmentation:
+  max_segment_duration: 8.0
+  min_segment_duration: 2.0
+
+scoring:
+  clip_min_duration: 45.0
+  clip_max_duration: 90.0
+  hook_min_score: 50.0
+  ending_min_score: 40.0
+
+llm:
+  use_llm: true
+  provider: groq
+  groq_model: llama-3.3-70b-versatile
+  groq_temperature: 0.1
+  groq_max_tokens: 4096
+
+storage:
+  pipeline_version: "1.0.0"
+
+pipeline:
+  max_concurrent_jobs: 5
+  auto_cleanup_hours: 1
+  resume_enabled: true
