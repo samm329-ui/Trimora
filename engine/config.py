@@ -7,8 +7,9 @@ from typing import Optional
 class AudioConfig:
     SAMPLE_RATE: int = 16000
     CHANNELS: int = 1
-    FORMAT: str = "wav"
-    FFMPEG_AUDIO_CODEC: str = "pcm_s16le"
+    FORMAT: str = "opus"
+    FFMPEG_AUDIO_CODEC: str = "libopus"
+    AUDIO_BITRATE: str = "12k"
     NORMALIZE: bool = False
 
 
@@ -23,10 +24,10 @@ class QualityConfig:
 
 @dataclass
 class ChunkingConfig:
-    CHUNK_SIZE_DEFAULT: int = 30
-    CHUNK_OVERLAP_DEFAULT: int = 2
-    CHUNK_SIZE_STRICT: int = 15
-    CHUNK_OVERLAP_STRICT: int = 3
+    CHUNK_SIZE_DEFAULT: int = 180
+    CHUNK_OVERLAP_DEFAULT: int = 5
+    CHUNK_SIZE_STRICT: int = 60
+    CHUNK_OVERLAP_STRICT: int = 5
     FADE_IN_MS: int = 50
     FADE_OUT_MS: int = 50
     EXPORT_FORMAT: str = "mp3"
@@ -176,10 +177,10 @@ class StorageConfig:
 
 @dataclass
 class LLMConfig:
-    USE_LLM: bool = True
-    MAX_SEGMENTS_TO_LABEL: int = 100
-    MAX_CANDIDATES_TO_LABEL: int = 20
-    MAX_REJECTED_TO_LABEL: int = 20
+    USE_LLM: bool = False
+    MAX_SEGMENTS_TO_LABEL: int = 20
+    MAX_CANDIDATES_TO_LABEL: int = 5
+    MAX_REJECTED_TO_LABEL: int = 0
     PROVIDER: str = "groq"
     GROQ_API_KEY_ENV: str = "GROQ_API_KEY"
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
