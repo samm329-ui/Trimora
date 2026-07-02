@@ -50,7 +50,7 @@ flowchart TB
         A[YouTube URL / Local File]
     end
 
-    subgraph Stage1["Stage 1-3: Audio & Transcription"]
+    subgraph Stage1["Stage 1-3: Audio and Transcription"]
         B[FFmpeg Audio Extraction]
         C[Groq Whisper Transcription]
         D[WhisperX Alignment]
@@ -73,32 +73,46 @@ flowchart TB
         L[Context Database]
     end
 
-    subgraph Stage5["Stage 10-12: Hook Detection & Clip Generation"]
+    subgraph Stage5["Stage 10-12: Hook Detection and Clip Gen"]
         M[Hook Rules]
-        N[Body / Ending Selection]
+        N[Body and Ending Selection]
         O[Multi-Segment Clip Assembly]
     end
 
-    subgraph Stage6["Stage 13-14: Scoring & LLM"]
+    subgraph Stage6["Stage 13-14: Scoring and LLM"]
         P[6-Rule Validation]
         Q[Scoring Engine]
         R[LLM Teacher]
     end
 
-    subgraph Stage7["Stage 15+: ML & Persistence"]
+    subgraph Stage7["Stage 15+: ML and Persistence"]
         S[Pattern Detector]
         T[Confidence Propagation]
-        U[SQLite + JSON Storage]
+        U[SQLite and JSON Storage]
     end
 
-    A --> B --> C --> D
-    D --> E --> F
-    F --> G & H & I & J
-    G & H & I & J --> K --> L
-    L --> M --> N --> O
-    O --> P --> Q
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    F --> H
+    F --> I
+    F --> J
+    G --> K
+    H --> K
+    I --> K
+    J --> K
+    K --> L
+    L --> M
+    M --> N
+    N --> O
+    O --> P
+    P --> Q
     Q --> R
-    R --> S --> T
+    R --> S
+    S --> T
     T --> U
 ```
 
@@ -123,7 +137,7 @@ flowchart LR
     end
 
     subgraph External["External APIs"]
-        GROQ[Groq API<br/>Whisper + LLM]
+        GROQ[Groq API<br/>Whisper and LLM]
         GEMINI[Gemini API<br/>LLM Teacher]
     end
 
@@ -133,10 +147,18 @@ flowchart LR
         WX[WhisperX]
     end
 
-    P --> FF & LB & WX & GROQ & GEMINI
-    P --> KG --> CD
-    P --> CS --> PI
-    P --> JSON & SQL & GLOBAL
+    P --> FF
+    P --> LB
+    P --> WX
+    P --> GROQ
+    P --> GEMINI
+    P --> KG
+    KG --> CD
+    P --> CS
+    CS --> PI
+    P --> JSON
+    P --> SQL
+    P --> GLOBAL
 ```
 
 ---
@@ -211,9 +233,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Aligned Segments] --> P[Punctuation Split<br/>(. ! ? newline)]
-    P --> T[Time Split<br/>>8s overflow chunks]
-    T --> M[Merge Short<br/><2s into neighbors]
+    A[Aligned Segments] --> P[Punctuation Split<br/>dot, excl, ques, newline]
+    P --> T[Time Split<br/>over 8s chunks]
+    T --> M[Merge Short<br/>under 2s]
     M --> S[Atomic Segments]
     S --> V[VADER Sentiment]
     S --> RX[73 Regex Patterns<br/>8 categories]
@@ -269,13 +291,18 @@ Total Score = 0.35 × Hook + 0.25 × Body + 0.20 × Ending + 0.15 × Flow + 0.05
 
 ```mermaid
 flowchart LR
-    CLIP[Validated Clip] --> H[0.35 Hook<br/>curiosity + energy + brevity]
-    CLIP --> B[0.25 Body<br/>personal + sentiment + pacing]
-    CLIP --> E[0.20 Ending<br/>positivity + takeaway + fit]
-    CLIP --> F[0.15 Flow<br/>transitions + emotional arc]
-    CLIP --> P[0.05 Practicality<br/>actionable content]
+    CLIP[Validated Clip] --> H[0.35 Hook<br/>curiosity and energy]
+    CLIP --> B[0.25 Body<br/>personal and sentiment]
+    CLIP --> E[0.20 Ending<br/>takeaway and positivity]
+    CLIP --> F[0.15 Flow<br/>transitions and arc]
+    CLIP --> P2[0.05 Practicality<br/>actionable content]
     CLIP --> U[0.05 Uniqueness<br/>TF-IDF vs transcript]
-    H & B & E & F & P & U --> TOTAL[Total Score]
+    H --> TOTAL[Total Score]
+    B --> TOTAL
+    E --> TOTAL
+    F --> TOTAL
+    P2 --> TOTAL
+    U --> TOTAL
 ```
 
 #### 15–16+: ML & Persistence
@@ -284,17 +311,17 @@ flowchart LR
 flowchart LR
     ACCEPT[Accepted Clips] --> FS[FailureStore<br/>rule failure rates]
     ACCEPT --> PD[PatternDetector<br/>node-type sequences]
-    PD --> PM[PatternMatcher<br/>local → global]
+    PD --> PM[PatternMatcher<br/>local to global]
     PM --> PE[PatternEvolution<br/>version tracking]
     PM --> GG[GlobalGraph<br/>cross-video learning]
     ACCEPT --> CP[ConfidencePropagator<br/>stage reliability cascade]
     CP --> AT[AdaptiveThreshold<br/>routing decision]
     AT --> ROUTE{Route}
-    ROUTE -->|">0.90"| LOCAL[Local Model]
-    ROUTE -->|"0.75-0.90"| PATT[Pattern]
-    ROUTE -->|"0.60-0.75"| RULE[Rule Engine]
-    ROUTE -->|"0.30-0.60"| LLM[LLM Teacher]
-    ROUTE -->|"<0.30"| HUMAN[Human Review]
+    ROUTE -- "above 0.90" --> LOCAL[Local Model]
+    ROUTE -- "0.75 to 0.90" --> PATT[Pattern]
+    ROUTE -- "0.60 to 0.75" --> RULE[Rule Engine]
+    ROUTE -- "0.30 to 0.60" --> LLM[LLM Teacher]
+    ROUTE -- "below 0.30" --> HUMAN[Human Review]
 ```
 
 ---
@@ -434,19 +461,19 @@ All 6 must pass for a clip to be accepted:
 
 ```mermaid
 flowchart LR
-    CLIP[Complete Clip] --> DUR{Duration<br/>45-90s?}
-    DUR -->|Yes| HOOK{Hook<br/><8s?}
-    HOOK -->|Yes| CURIO{Has<br/>Curiosity?}
-    CURIO -->|Yes| VALUE{Has Practicality<br/>or Emotion?}
-    VALUE -->|Yes| SPEAKER{Speaker<br/>Changes ≤2?}
-    SPEAKER -->|Yes| CONTEXT{No Context<br/>Gaps?}
-    CONTEXT -->|Yes| ACCEPT[✓ Accepted]
-    DUR -->|No| REJ[✗ Rejected]
-    HOOK -->|No| REJ
-    CURIO -->|No| REJ
-    VALUE -->|No| REJ
-    SPEAKER -->|No| REJ
-    CONTEXT -->|No| REJ
+    CLIP[Complete Clip] --> DUR{Duration<br/>45 to 90 s?}
+    DUR -- Yes --> HOOK{Hook<br/>under 8 s?}
+    HOOK -- Yes --> CURIO{Has<br/>Curiosity?}
+    CURIO -- Yes --> VALUE{Has Practicality<br/>or Emotion?}
+    VALUE -- Yes --> SPEAKER{Speaker<br/>Changes at most 2?}
+    SPEAKER -- Yes --> CONTEXT{No Context<br/>Gaps?}
+    CONTEXT -- Yes --> ACCEPT[Accepted]
+    DUR -- No --> REJ[Rejected]
+    HOOK -- No --> REJ
+    CURIO -- No --> REJ
+    VALUE -- No --> REJ
+    SPEAKER -- No --> REJ
+    CONTEXT -- No --> REJ
 ```
 
 | Rule | Description | Config |
@@ -629,11 +656,11 @@ Formula: `confidence_final = ∏(stage_reliability[i])` for all completed stages
 ```mermaid
 flowchart LR
     CONF[Confidence Score] --> DECIDE{Threshold}
-    DECIDE -->|≥0.90| LOCAL[Local Model<br/>fast, 0-cost]
-    DECIDE -->|0.75-0.90| PATTERN[Pattern Match<br/>fast, 0-cost]
-    DECIDE -->|0.60-0.75| RULE[Rule Engine<br/>default path]
-    DECIDE -->|0.30-0.60| LLM[LLM Teacher<br/>API cost]
-    DECIDE -->|<0.30| HUMAN[Human Review<br/>highest touch]
+    DECIDE -- "0.90 and above" --> LOCAL[Local Model<br/>fast, 0-cost]
+    DECIDE -- "0.75 to 0.90" --> PATTERN[Pattern Match<br/>fast, 0-cost]
+    DECIDE -- "0.60 to 0.75" --> RULE[Rule Engine<br/>default path]
+    DECIDE -- "0.30 to 0.60" --> LLM[LLM Teacher<br/>API cost]
+    DECIDE -- "below 0.30" --> HUMAN[Human Review<br/>highest touch]
 ```
 
 ### Feature Provenance
@@ -666,41 +693,49 @@ Total = 0.35 × hook_score + 0.25 × body_score + 0.20 × ending_score + 0.15 ×
 
 ```mermaid
 flowchart LR
-    H1["0.40 × has_curiosity<br/>(what_if, question, bigest)"]
-    H2["0.30 × speech_rate / 3.0<br/>(energy)"]
-    H3["0.30 × 1 - |duration - 5| / 10<br/>(brevity)"]
-    H1 & H2 & H3 --> H_TOTAL["Hook Score"]
+    H1["0.40 x has_curiosity<br/>(what_if, question, biggest)"]
+    H2["0.30 x speech_rate / 3.0<br/>(energy)"]
+    H3["0.30 x 1 - abs(dur - 5) / 10<br/>(brevity)"]
+    H1 --> H_TOTAL["Hook Score"]
+    H2 --> H_TOTAL
+    H3 --> H_TOTAL
 ```
 
 ### Body Score (0.25 weight, averaged across all body segments)
 
 ```mermaid
 flowchart LR
-    B1["0.30 × has_personal<br/>(relatability)"]
-    B2["0.30 × |sentiment| > 0.2<br/>(emotional weight)"]
-    B3["0.40 × duration < 12s<br/>(pacing)"]
-    B1 & B2 & B3 --> B_SEG[Per-Segment Score]
-    B_SEG --> B_AVG[Average → Body Score]
+    B1["0.30 x has_personal<br/>(relatability)"]
+    B2["0.30 x abs(sentiment) over 0.2<br/>(emotional weight)"]
+    B3["0.40 x duration under 12s<br/>(pacing)"]
+    B1 --> B_SEG[Per-Segment Score]
+    B2 --> B_SEG
+    B3 --> B_SEG
+    B_SEG --> B_AVG[Average to Body Score]
 ```
 
 ### Ending Score (0.20 weight)
 
 ```mermaid
 flowchart LR
-    E1["0.30 × sentiment<br/>(positive resolution)"]
-    E2["0.40 × has_takeaway<br/>(lesson / key lesson)"]
-    E3["0.30 × 1 - |duration - 7| / 10<br/>(length fit)"]
-    E1 & E2 & E3 --> E_TOTAL["Ending Score"]
+    E1["0.30 x sentiment<br/>(positive resolution)"]
+    E2["0.40 x has_takeaway<br/>(lesson or key lesson)"]
+    E3["0.30 x 1 - abs(dur - 7) / 10<br/>(length fit)"]
+    E1 --> E_TOTAL["Ending Score"]
+    E2 --> E_TOTAL
+    E3 --> E_TOTAL
 ```
 
 ### Flow Score (0.15 weight)
 
 ```mermaid
 flowchart LR
-    F1["0.30 × hook→body gap < 2s<br/>(tight transition)"]
-    F2["0.30 × body→ending gap < 3s<br/>(smooth segue)"]
-    F3["0.40 × has_emotional_arc<br/>(beginning → tension → resolution)"]
-    F1 & F2 & F3 --> F_TOTAL["Flow Score"]
+    F1["0.30 x hook to body gap under 2s<br/>(tight transition)"]
+    F2["0.30 x body to ending gap under 3s<br/>(smooth segue)"]
+    F3["0.40 x has_emotional_arc<br/>(tension arc)"]
+    F1 --> F_TOTAL["Flow Score"]
+    F2 --> F_TOTAL
+    F3 --> F_TOTAL
 ```
 
 ### Uniqueness Score (0.05 weight)
@@ -711,9 +746,10 @@ TF-IDF based: measures how rare the clip's words are within the full transcript.
 flowchart LR
     TRANS[Full Transcript] --> FREQ[Word Frequencies<br/>Counter]
     CLIP[Clip Text] --> WORDS[Clip Words]
-    FREQ & WORDS --> IDF[IDF per word<br/>log(N / freq)]
+    FREQ --> IDF[IDF per word<br/>log(N over freq)]
+    WORDS --> IDF
     IDF --> AVG[Average IDF]
-    AVG --> UNIQ[min(avg_idf / 3, 1.0)]
+    AVG --> UNIQ[min(avg_idf over 3, 1.0)]
 ```
 
 ---
