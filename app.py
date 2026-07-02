@@ -1,15 +1,13 @@
 import os
-import sys
 import uuid
 import subprocess
-import threading
 import json
 import shutil
 import glob
 import time
 import asyncio
 from dotenv import load_dotenv
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,53 +16,53 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+# ── Locate ffmpeg/ffprobe (common locations) ─────────────
+_FFMPEG_DIRS = [
+    os.path.join(os.path.dirname(__file__), "ffmpeg", "bin"),
+    r"C:\ffmpeg\bin",
+    r"C:\Program Files\ffmpeg\bin",
+]
+for _d in _FFMPEG_DIRS:
+    if os.path.isfile(os.path.join(_d, "ffmpeg.exe")):
+        os.environ["PATH"] = _d + os.pathsep + os.environ.get("PATH", "")
+        break
+
 # Constants
 UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "output"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048
 JOB_RETENTION_SECONDS = 3600
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # Application State
-job_queue = asyncio.Queue()
 jobs: Dict[str, Dict] = {}
-concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 
-
-def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
-    try:
-        os.makedirs(job_output_dir, exist_ok=True)
-        pattern = os.path.join(OUTPUT_DIR, f"{job_id}_*_metadata.json")
-        meta_candidates = sorted(glob.glob(pattern), key=lambda p: os.path.getmtime(p), reverse=True)
-        if not meta_candidates:
-            return False
-
-        metadata_path = meta_candidates[0]
-        base_name = os.path.basename(metadata_path).replace("_metadata.json", "")
-
-        dest_metadata = os.path.join(job_output_dir, os.path.basename(metadata_path))
-        if os.path.abspath(metadata_path) != os.path.abspath(dest_metadata):
-            shutil.move(metadata_path, dest_metadata)
-
-        clip_pattern = os.path.join(OUTPUT_DIR, f"{base_name}_clip_*.mp4")
-        for clip_path in glob.glob(clip_pattern):
-            dest_clip = os.path.join(job_output_dir, os.path.basename(clip_path))
-            if os.path.abspath(clip_path) != os.path.abspath(dest_clip):
-                shutil.move(clip_path, dest_clip)
-
-        temp_clip_pattern = os.path.join(OUTPUT_DIR, f"temp_{base_name}_clip_*.mp4")
-        for clip_path in glob.glob(temp_clip_pattern):
-            dest_clip = os.path.join(job_output_dir, os.path.basename(clip_path))
-            if os.path.abspath(clip_path) != os.path.abspath(dest_clip):
-                shutil.move(clip_path, dest_clip)
-
-        return True
-    except Exception:
-        return False
+# Common yt-dlp options for YouTube downloading
+_COMMON_YDL_OPTS = {
+    'quiet': True,
+    'no_warnings': True,
+    'socket_timeout': 30,
+    'retries': 10,
+    'fragment_retries': 10,
+    'nocheckcertificate': True,
+    'cachedir': False,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['tv_embed', 'android', 'mweb', 'web'],
+            'player_skip': ['webpage', 'configs'],
+        }
+    },
+    'http_headers': {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/120.0.0.0 Safari/537.36'
+        ),
+    },
+}
 
 
 async def cleanup_jobs():
@@ -77,7 +75,7 @@ async def cleanup_jobs():
                 job_path = os.path.join(OUTPUT_DIR, job_id)
                 if os.path.isdir(job_path):
                     if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
-                        print(f"🧹 Purging old job: {job_id}")
+                        print(f"Purging old job: {job_id}")
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
                             del jobs[job_id]
@@ -91,38 +89,11 @@ async def cleanup_jobs():
                     pass
 
         except Exception as e:
-            print(f"⚠️ Cleanup error: {e}")
-
-
-async def process_queue():
-    print(f"🚀 Job Queue Worker started with {MAX_CONCURRENT_JOBS} concurrent slots.")
-    while True:
-        try:
-            job_id = await job_queue.get()
-            await concurrency_semaphore.acquire()
-            print(f"🔄 Acquired slot for job: {job_id}")
-            asyncio.create_task(run_job_wrapper(job_id))
-        except Exception as e:
-            print(f"❌ Queue dispatch error: {e}")
-            await asyncio.sleep(1)
-
-
-async def run_job_wrapper(job_id):
-    try:
-        job = jobs.get(job_id)
-        if job:
-            await run_job(job_id, job)
-    except Exception as e:
-        print(f"❌ Job wrapper error {job_id}: {e}")
-    finally:
-        concurrency_semaphore.release()
-        job_queue.task_done()
-        print(f"✅ Released slot for job: {job_id}")
+            print(f"Cleanup error: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
     yield
 
@@ -140,109 +111,150 @@ app.add_middleware(
 app.mount("/videos", StaticFiles(directory=OUTPUT_DIR), name="videos")
 
 
-class ProcessRequest(BaseModel):
-    url: str
+def _cut_and_convert_clip(input_path: str, output_path: str,
+                          start: float, end: float,
+                          output_width: int = 1080, output_height: int = 1920):
+    """Cut video segment and convert to 9:16 using FFmpeg filters only (no frame-by-frame)."""
+    probe = subprocess.run([
+        "ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+        "-of", "csv=p=0", input_path
+    ], capture_output=True, text=True, timeout=30)
+    has_audio = "audio" in probe.stdout
+
+    filter_complex = (
+        f"[0:v]scale={output_width}:{output_height}:"
+        f"force_original_aspect_ratio=increase,"
+        f"crop={output_width}:{output_height},boxblur=30:5[b];"
+        f"[0:v]scale={output_width}:{output_height}:"
+        f"force_original_aspect_ratio=decrease[v];"
+        f"[b][v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,format=yuv420p"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-to", str(end),
+        "-i", input_path,
+        "-filter_complex", filter_complex,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+    ]
+
+    if has_audio:
+        cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+
+    cmd.append(output_path)
+
+    subprocess.run(cmd, check=True, capture_output=True, timeout=300)
 
 
-def enqueue_output(out, job_id):
-    try:
-        for line in iter(out.readline, b''):
-            decoded_line = line.decode('utf-8').strip()
-            if decoded_line:
-                print(f"📝 [Job Output] {decoded_line}")
-                if job_id in jobs:
-                    jobs[job_id]['logs'].append(decoded_line)
-    except Exception as e:
-        print(f"Error reading output for job {job_id}: {e}")
-    finally:
-        out.close()
+def _transcribe_only(input_path: str, groq_key: str) -> dict:
+    import subprocess
+    from groq import Groq
 
+    stem = os.path.splitext(os.path.basename(input_path))[0]
+    audio_path = os.path.join(os.path.dirname(input_path), f"{stem}.opus")
+    subprocess.run([
+        "ffmpeg", "-y", "-i", input_path,
+        "-map", "a",
+        "-ar", "16000", "-ac", "1",
+        "-c:a", "libopus", "-b:a", "12k",
+        audio_path
+    ], check=True, capture_output=True)
 
-async def run_job(job_id, job_data):
-    cmd = job_data['cmd']
-    env = job_data['env']
-    output_dir = job_data['output_dir']
-
-    jobs[job_id]['status'] = 'processing'
-    jobs[job_id]['logs'].append("Job started by worker.")
-    print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=env,
-            cwd=os.getcwd()
+    client = Groq(api_key=groq_key)
+    with open(audio_path, "rb") as f:
+        response = client.audio.transcriptions.create(
+            file=(os.path.basename(audio_path), f.read()),
+            model="whisper-large-v3",
+            response_format="verbose_json",
+            temperature=0.0,
         )
 
-        t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
-        t_log.daemon = True
-        t_log.start()
+    segments = []
+    for seg in getattr(response, "segments", []):
+        segments.append({
+            "start": seg.get("start", 0),
+            "end": seg.get("end", 0),
+            "text": seg.get("text", "").strip(),
+        })
 
-        start_wait = time.time()
-        while process.poll() is None:
-            await asyncio.sleep(2)
+    full_text = response.text.strip() if hasattr(response, "text") else str(response).strip()
+    return {"transcript": full_text, "segments": segments}
 
-            try:
-                json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-                if json_files:
-                    target_json = json_files[0]
-                    if os.path.getsize(target_json) > 0:
-                        with open(target_json, 'r') as f:
-                            data = json.load(f)
+async def _run_engine_process_job(job_id: str, input_path: str, output_dir: str,
+                                  gemini_key: str = "", groq_key: str = "",
+                                  transcript_only: bool = False):
+    """Run engine pipeline + cut clips. Used by both /api/process and /api/engine/process."""
 
-                        base_name = os.path.basename(target_json).replace('_metadata.json', '')
-                        clips = data.get('shorts', [])
-                        cost_analysis = data.get('cost_analysis')
+    def _sync_work():
+        local_jobs = jobs
+        try:
+            local_jobs[job_id]['status'] = 'processing'
+            local_jobs[job_id]['logs'].append("Engine pipeline starting...")
 
-                        ready_clips = []
-                        for i, clip in enumerate(clips):
-                            clip_filename = f"{base_name}_clip_{i+1}.mp4"
-                            clip_path = os.path.join(output_dir, clip_filename)
-                            if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
-                                clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
-                                ready_clips.append(clip)
+            os.environ["GROQ_API_KEY"] = groq_key
+            if gemini_key:
+                os.environ["GEMINI_API_KEY"] = gemini_key
 
-                        if ready_clips:
-                            jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
-            except Exception:
-                pass
+            from engine.config import load_config_from_yaml
+            load_config_from_yaml("engine_config.yaml")
 
-        returncode = process.returncode
+            if transcript_only:
+                result_data = _transcribe_only(input_path, groq_key)
+                local_jobs[job_id]['status'] = 'completed'
+                local_jobs[job_id]['result'] = result_data
+                local_jobs[job_id]['logs'].append("Transcription complete.")
+                return
 
-        if returncode == 0:
-            jobs[job_id]['status'] = 'completed'
-            jobs[job_id]['logs'].append("Process finished successfully.")
+            from engine.pipeline import Pipeline
+            pipeline = Pipeline(video_id=job_id)
+            result = pipeline.run(input_path)
 
-            json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-            if not json_files:
-                if _relocate_root_job_artifacts(job_id, output_dir):
-                    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-            if json_files:
-                target_json = json_files[0]
-                with open(target_json, 'r') as f:
-                    data = json.load(f)
+            if result.error:
+                local_jobs[job_id]['status'] = 'failed'
+                local_jobs[job_id]['logs'].append(f"Engine error: {result.error}")
+                return
 
-                base_name = os.path.basename(target_json).replace('_metadata.json', '')
-                clips = data.get('shorts', [])
-                cost_analysis = data.get('cost_analysis')
+            clips = []
+            for i, candidate in enumerate(result.candidates[:10]):
+                start = candidate['start']
+                end = candidate['end']
+                clip_filename = f"{job_id}_clip_{i+1}.mp4"
+                clip_path = os.path.join(output_dir, clip_filename)
 
-                for i, clip in enumerate(clips):
-                    clip_filename = f"{base_name}_clip_{i+1}.mp4"
-                    clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+                try:
+                    _cut_and_convert_clip(input_path, clip_path, start, end)
+                except Exception as e:
+                    local_jobs[job_id]['logs'].append(f"Clip {i+1} FFmpeg error: {e}")
+                    continue
 
-                jobs[job_id]['result'] = {'clips': clips, 'cost_analysis': cost_analysis}
-            else:
-                jobs[job_id]['status'] = 'failed'
-                jobs[job_id]['logs'].append("No metadata file generated.")
-        else:
-            jobs[job_id]['status'] = 'failed'
-            jobs[job_id]['logs'].append(f"Process failed with exit code {returncode}")
+                if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
+                    hook_text = candidate.get('hook_text', '')
+                    clips.append({
+                        "video_url": f"/videos/{job_id}/{clip_filename}",
+                        "start": start,
+                        "end": end,
+                        "total_duration": candidate.get('total_duration', end - start),
+                        "hook_text": hook_text,
+                        "hook_score": candidate.get('hook_score', 0),
+                        "total_score": candidate.get('total_score', 0),
+                        "video_title_for_youtube_short": hook_text[:100] if hook_text else "Viral Short",
+                        "video_description_for_tiktok": hook_text,
+                        "video_description_for_instagram": hook_text,
+                        "viral_hook_text": hook_text[:50] if hook_text else "",
+                    })
 
-    except Exception as e:
-        jobs[job_id]['status'] = 'failed'
-        jobs[job_id]['logs'].append(f"Execution error: {str(e)}")
+            local_jobs[job_id]['status'] = 'completed'
+            local_jobs[job_id]['result'] = {'clips': clips, 'stats': result.stats}
+            local_jobs[job_id]['logs'].append(
+                f"Generated {len(clips)} clips (from {len(result.candidates)} candidates)")
+
+        except Exception as e:
+            local_jobs[job_id]['status'] = 'failed'
+            local_jobs[job_id]['logs'].append(f"Error: {str(e)}")
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _sync_work)
 
 
 @app.get("/api/config")
@@ -257,10 +269,10 @@ async def process_endpoint(
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None)
 ):
-    api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
     groq_key = request.headers.get("X-Groq-Key") or os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(status_code=400, detail="Missing X-Groq-Key header (required for engine pipeline)")
+    gemini_key = request.headers.get("X-Gemini-Key", "")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
 
@@ -296,20 +308,31 @@ async def process_endpoint(
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
 
-    cmd = [sys.executable, "-u", "main.py"]
-    env = os.environ.copy()
-    env["GEMINI_API_KEY"] = api_key
-    if groq_key:
-        env["GROQ_API_KEY"] = groq_key
-
+    input_path = None
     if url:
-        cmd.extend(["-u", url])
+        from yt_dlp import YoutubeDL
+        ydl_opts = {
+            **_COMMON_YDL_OPTS,
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "outtmpl": os.path.join(job_output_dir, "%(id)s.%(ext)s"),
+            "overwrites": True,
+        }
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                input_path = os.path.join(job_output_dir, f"{info['id']}.mp4")
+                if not os.path.exists(input_path):
+                    for f in os.listdir(job_output_dir):
+                        if f.startswith(info['id']) and f.endswith('.mp4'):
+                            input_path = os.path.join(job_output_dir, f)
+                            break
+                video_title = info.get('title', 'youtube_video')
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"YouTube download failed: {str(e)}")
     else:
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
-
         size = 0
         limit_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
-
         with open(input_path, "wb") as buffer:
             while content := await file.read(1024 * 1024):
                 size += len(content)
@@ -319,22 +342,20 @@ async def process_endpoint(
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
                 buffer.write(content)
 
-        cmd.extend(["-i", input_path])
-
-    cmd.extend(["-o", job_output_dir])
-
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
     jobs[job_id] = {
         'status': 'queued',
         'logs': [f"Job {job_id} queued."],
-        'cmd': cmd,
-        'env': env,
+        'result': None,
         'output_dir': job_output_dir,
-        'attestation': attestation
+        'attestation': attestation,
     }
 
-    await job_queue.put(job_id)
+    asyncio.create_task(_run_engine_process_job(
+        job_id, input_path, job_output_dir,
+        gemini_key=gemini_key, groq_key=groq_key
+    ))
 
     return {"job_id": job_id, "status": "queued"}
 
@@ -364,11 +385,12 @@ async def engine_process_endpoint(
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
     category: Optional[str] = Form("general"),
+    mode: Optional[str] = Form("full"),
 ):
-    api_key = request.headers.get("X-Gemini-Key")
     groq_key = request.headers.get("X-Groq-Key") or os.environ.get("GROQ_API_KEY", "")
     if not groq_key:
         raise HTTPException(status_code=400, detail="Groq API key required for engine pipeline")
+    gemini_key = request.headers.get("X-Gemini-Key", "")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes") if acknowledged else False
 
@@ -378,6 +400,7 @@ async def engine_process_endpoint(
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
         category = body.get("category", "general")
+        mode = body.get("mode", "full")
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -392,22 +415,27 @@ async def engine_process_endpoint(
     if url:
         from yt_dlp import YoutubeDL
         ydl_opts = {
-            "format": "bestaudio/best",
+            **_COMMON_YDL_OPTS,
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "outtmpl": os.path.join(job_output_dir, "%(id)s.%(ext)s"),
-            "quiet": True,
+            "overwrites": True,
         }
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            input_path = os.path.join(job_output_dir, f"{info['id']}.{info['ext']}")
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                input_path = os.path.join(job_output_dir, f"{info['id']}.mp4")
+                if not os.path.exists(input_path):
+                    for f in os.listdir(job_output_dir):
+                        if f.startswith(info['id']) and f.endswith('.mp4'):
+                            input_path = os.path.join(job_output_dir, f)
+                            break
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"YouTube download failed: {str(e)}")
     elif file:
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
         with open(input_path, "wb") as buffer:
             while content := await file.read(1024 * 1024):
                 buffer.write(content)
-
-    os.environ["GROQ_API_KEY"] = groq_key
-    if api_key:
-        os.environ["GEMINI_API_KEY"] = api_key
 
     jobs[job_id] = {
         'status': 'queued',
@@ -416,40 +444,13 @@ async def engine_process_endpoint(
         'output_dir': job_output_dir,
     }
 
-    asyncio.create_task(_run_engine_job(job_id, input_path, category, job_output_dir))
+    asyncio.create_task(_run_engine_process_job(
+        job_id, input_path, job_output_dir,
+        gemini_key=gemini_key, groq_key=groq_key,
+        transcript_only=(mode == "transcript")
+    ))
 
     return {"job_id": job_id, "status": "queued"}
-
-
-async def _run_engine_job(job_id: str, input_path: str, category: str, output_dir: str):
-    try:
-        jobs[job_id]['status'] = 'processing'
-        jobs[job_id]['logs'].append("Engine pipeline starting...")
-
-        from engine.pipeline import Pipeline
-        pipeline = Pipeline(video_id=job_id)
-
-        def run_sync():
-            return pipeline.run(input_path, category=category)
-
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, run_sync)
-
-        if result.error:
-            jobs[job_id]['status'] = 'failed'
-            jobs[job_id]['logs'].append(f"Engine error: {result.error}")
-        else:
-            jobs[job_id]['status'] = 'completed'
-            jobs[job_id]['result'] = {
-                'video_id': result.video_id,
-                'candidates': result.candidates,
-                'best_clip': result.best_clip,
-                'stats': result.stats,
-            }
-            jobs[job_id]['logs'].append(f"Engine complete: {len(result.candidates)} candidates, best score {result.best_clip.get('total_score', 0) if result.best_clip else 0}")
-    except Exception as e:
-        jobs[job_id]['status'] = 'failed'
-        jobs[job_id]['logs'].append(f"Engine error: {str(e)}")
 
 
 class EditRequest(BaseModel):
@@ -570,43 +571,51 @@ async def get_clip_transcript(job_id: str, clip_index: int):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Try legacy metadata.json (old pipeline) first
     output_dir = os.path.join(OUTPUT_DIR, job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if json_files:
+        with open(json_files[0], 'r') as f:
+            data = json.load(f)
+        transcript = data.get('transcript')
+        clips = data.get('shorts', [])
+        if transcript and clip_index < len(clips):
+            clip_data = clips[clip_index]
+            clip_start = clip_data.get('start', 0)
+            clip_end = clip_data.get('end', 0)
+            captions = []
+            for segment in transcript.get('segments', []):
+                for word_info in segment.get('words', []):
+                    if word_info['end'] > clip_start and word_info['start'] < clip_end:
+                        captions.append({
+                            "text": word_info.get('word', '').strip(),
+                            "startMs": int((max(0, word_info['start'] - clip_start)) * 1000),
+                            "endMs": int((max(0, word_info['end'] - clip_start)) * 1000),
+                        })
+            return {
+                "captions": captions,
+                "durationSec": clip_end - clip_start,
+                "language": transcript.get('language', 'en'),
+            }
 
-    if not json_files:
-        raise HTTPException(status_code=404, detail="Metadata not found")
+    # New engine pipeline — return clip timing without word-level captions
+    result = jobs[job_id].get('result')
+    if not result or 'clips' not in result:
+        raise HTTPException(status_code=400, detail="Clip data not available")
 
-    with open(json_files[0], 'r') as f:
-        data = json.load(f)
-
-    transcript = data.get('transcript')
-    if not transcript:
-        raise HTTPException(status_code=400, detail="Transcript not found in metadata")
-
-    clips = data.get('shorts', [])
+    clips = result['clips']
     if clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    clip_data = clips[clip_index]
-    clip_start = clip_data.get('start', 0)
-    clip_end = clip_data.get('end', 0)
-
-    captions = []
-    for segment in transcript.get('segments', []):
-        for word_info in segment.get('words', []):
-            if word_info['end'] > clip_start and word_info['start'] < clip_end:
-                captions.append({
-                    "text": word_info.get('word', '').strip(),
-                    "startMs": int((max(0, word_info['start'] - clip_start)) * 1000),
-                    "endMs": int((max(0, word_info['end'] - clip_start)) * 1000),
-                })
-
+    clip = clips[clip_index]
+    clip_start = clip.get('start', 0)
+    clip_end = clip.get('end', 0)
     duration_sec = clip_end - clip_start
 
     return {
-        "captions": captions,
+        "captions": [],
         "durationSec": duration_sec,
-        "language": transcript.get('language', 'en'),
+        "language": "en",
     }
 
 
@@ -616,33 +625,44 @@ async def add_subtitles(req: SubtitleRequest):
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs[req.job_id]
-
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+
+    # Try legacy metadata.json first, then new engine result
+    clip_start = clip_end = 0
+    transcript = None
+    has_transcript_data = False
+
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if json_files:
+        with open(json_files[0], 'r') as f:
+            data = json.load(f)
+        transcript = data.get('transcript')
+        clips = data.get('shorts', [])
+        if transcript and req.clip_index < len(clips):
+            clip_data = clips[req.clip_index]
+            clip_start = clip_data.get('start', 0)
+            clip_end = clip_data.get('end', 0)
+            has_transcript_data = True
 
-    if not json_files:
-        raise HTTPException(status_code=404, detail="Metadata not found")
-
-    with open(json_files[0], 'r') as f:
-        data = json.load(f)
-
-    transcript = data.get('transcript')
-    if not transcript:
-        raise HTTPException(status_code=400, detail="Transcript not found in metadata. Please process a new video.")
-
-    clips = data.get('shorts', [])
-    if req.clip_index >= len(clips):
-        raise HTTPException(status_code=404, detail="Clip not found")
-
-    clip_data = clips[req.clip_index]
+    if not has_transcript_data:
+        # New engine pipeline — use result clips
+        result = job.get('result')
+        if result and 'clips' in result and req.clip_index < len(result['clips']):
+            clip = result['clips'][req.clip_index]
+            clip_start = clip.get('start', 0)
+            clip_end = clip.get('end', 0)
 
     if req.input_filename:
         filename = os.path.basename(req.input_filename)
     else:
-        filename = clip_data.get('video_url', '').split('/')[-1]
-        if not filename:
-            base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
-            filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
+        result = job.get('result')
+        if result and 'clips' in result and req.clip_index < len(result['clips']):
+            clip = result['clips'][req.clip_index]
+            filename = clip.get('video_url', '').split('/')[-1]
+            if not filename:
+                filename = f"{job_id}_clip_{req.clip_index+1}.mp4"
+        else:
+            filename = f"{job_id}_clip_{req.clip_index+1}.mp4"
 
     input_path = os.path.join(output_dir, filename)
     if not os.path.exists(input_path):
@@ -650,25 +670,16 @@ async def add_subtitles(req: SubtitleRequest):
 
     srt_filename = f"subs_{req.clip_index}_{int(time.time())}.srt"
     srt_path = os.path.join(output_dir, srt_filename)
-
     output_filename = f"subtitled_{filename}"
     output_path = os.path.join(output_dir, output_filename)
 
     try:
-        is_dubbed = filename.startswith("translated_")
-
-        if is_dubbed:
-            print(f"🎙️ Dubbed video detected, transcribing audio for subtitles...")
-            def run_transcribe_srt():
-                return generate_srt_from_video(input_path, srt_path)
-
-            loop = asyncio.get_event_loop()
-            success = await loop.run_in_executor(None, run_transcribe_srt)
+        if transcript and has_transcript_data:
+            success = generate_srt(transcript, clip_start, clip_end, srt_path)
+            if not success:
+                raise HTTPException(status_code=400, detail="No words found for this clip range.")
         else:
-            success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
-
-        if not success:
-            raise HTTPException(status_code=400, detail="No words found for this clip range.")
+            raise HTTPException(status_code=400, detail="Word-level transcript not available for subtitle generation.")
 
         def run_burn():
             burn_subtitles(input_path, srt_path, output_path,
@@ -681,22 +692,11 @@ async def add_subtitles(req: SubtitleRequest):
         await loop.run_in_executor(None, run_burn)
 
     except Exception as e:
-        print(f"❌ Subtitle Error: {e}")
+        print(f"Subtitle Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    if req.clip_index < len(job['result']['clips']):
+    if job.get('result') and 'clips' in job['result'] and req.clip_index < len(job['result']['clips']):
         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-
-    try:
-        if req.clip_index < len(clips):
-            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-            data['shorts'] = clips
-
-            with open(json_files[0], 'w') as f:
-                json.dump(data, f, indent=4)
-                print(f"✅ Metadata updated with subtitled video for clip {req.clip_index}")
-    except Exception as e:
-        print(f"⚠️ Failed to update metadata.json: {e}")
 
     return {
         "success": True,
@@ -720,27 +720,16 @@ async def add_hook(req: HookRequest):
 
     job = jobs[req.job_id]
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-
-    if not json_files:
-        raise HTTPException(status_code=404, detail="Metadata not found")
-
-    with open(json_files[0], 'r') as f:
-        data = json.load(f)
-
-    clips = data.get('shorts', [])
-    if req.clip_index >= len(clips):
-        raise HTTPException(status_code=404, detail="Clip not found")
-
-    clip_data = clips[req.clip_index]
 
     if req.input_filename:
         filename = os.path.basename(req.input_filename)
     else:
-        filename = clip_data.get('video_url', '').split('/')[-1]
-        if not filename:
-            base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
-            filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
+        result = job.get('result')
+        if result and 'clips' in result and req.clip_index < len(result['clips']):
+            clip = result['clips'][req.clip_index]
+            filename = clip.get('video_url', '').split('/')[-1]
+        else:
+            filename = f"{job_id}_clip_{req.clip_index+1}.mp4"
 
     input_path = os.path.join(output_dir, filename)
     if not os.path.exists(input_path):
@@ -760,21 +749,11 @@ async def add_hook(req: HookRequest):
         await loop.run_in_executor(None, run_hook)
 
     except Exception as e:
-        print(f"❌ Hook Error: {e}")
+        print(f"Hook Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    if req.clip_index < len(job['result']['clips']):
+    if job.get('result') and 'clips' in job['result'] and req.clip_index < len(job['result']['clips']):
         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-
-    try:
-        if req.clip_index < len(clips):
-            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-            data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
-                json.dump(data, f, indent=4)
-                print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
-    except Exception as e:
-        print(f"⚠️ Failed to update metadata.json: {e}")
 
     return {
         "success": True,

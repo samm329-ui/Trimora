@@ -166,11 +166,8 @@ class Pipeline:
         from .scoring.scorer import make_valid_clip, score_clip
         from .rules.hook_rules import find_hook_candidates
 
-        # Optional: word alignment (requires whisperx)
-        try:
-            from .transcription.aligner import align_segments
-        except ImportError:
-            align_segments = None
+        # Optional: word alignment (requires whisperx — disabled by default, CPU bottleneck)
+        align_segments = None
 
         # Optional: audio features (requires librosa)
         try:
@@ -183,10 +180,10 @@ class Pipeline:
         # Stage 1: Extract audio
         if "audio_extraction" not in completed:
             audio_path = self.run_stage("audio_extraction", extract_audio,
-                                         video_path, f"{self.video_id}.wav")
+                                         video_path, f"{self.video_id}.{self.cfg.audio.FORMAT}")
             self.mark_stage_complete("audio_extraction")
         else:
-            audio_path = f"{self.video_id}.wav"
+            audio_path = f"{self.video_id}.{self.cfg.audio.FORMAT}"
         self._stats["audio_extracted"] = True
 
         # Stage 2: Audio quality
@@ -208,21 +205,38 @@ class Pipeline:
             chunks = []
         self._stats["chunks"] = len(chunks)
 
-        # Stage 4: Transcribe chunks
+        # Stage 4: Transcribe chunks (parallel)
         if "transcription" not in completed:
-            raw_segments = []
-            for i, chunk in enumerate(chunks):
-                text = self.run_stage("transcription", transcribe_chunk, chunk.path)
-                text = remove_fillers(text)
-                if text.strip():
-                    lang = detect_language(text.split())
-                    raw_segments.append({
-                        "text": text,
-                        "start": chunk.start_time,
-                        "end": chunk.end_time,
-                        "language": lang,
-                    })
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            max_workers = self.cfg.pipeline.PARALLEL_MAX_WORKERS
+            raw_by_index = {}
+            total = len(chunks)
+            done = 0
+
+            print(f"[pipeline] Transcribing {total} chunks ({max_workers} workers)...")
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                fut_map = {pool.submit(transcribe_chunk, chunk.path): chunk for chunk in chunks}
+                for fut in as_completed(fut_map):
+                    chunk = fut_map[fut]
+                    done += 1
+                    if done % max(1, total // 10) == 0 or done == total:
+                        print(f"[pipeline] Transcribed {done}/{total} chunks")
+                    try:
+                        text = fut.result()
+                    except Exception:
+                        continue
+                    text = remove_fillers(text)
+                    if text.strip():
+                        lang = detect_language(text.split())
+                        raw_by_index[chunk.index] = {
+                            "text": text,
+                            "start": chunk.start_time,
+                            "end": chunk.end_time,
+                            "language": lang,
+                        }
+            raw_segments = [raw_by_index[i] for i in sorted(raw_by_index)]
             self.mark_stage_complete("transcription")
+            print(f"[pipeline] Transcription done: {len(raw_segments)} segments")
         else:
             raw_segments = []
         self._stats["raw_segments"] = len(raw_segments)
