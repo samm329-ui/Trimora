@@ -8,6 +8,8 @@ services:
       - .:/app
       - /app/__pycache__
       - ./output:/app/output
+    environment:
+      - MAX_CONCURRENT_JOBS=5
     restart: unless-stopped
 
   frontend:
@@ -18,23 +20,6 @@ services:
     volumes:
       - ./dashboard:/app
       - /app/node_modules
-    restart: unless-stopped
-    depends_on:
-      - backend
-
-  renderer:
-    build:
-      context: .
-      dockerfile: render-service/Dockerfile
-    container_name: Trimora-renderer
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./output:/output
-    environment:
-      - REMOTION_BUNDLE_PATH=/app/remotion
-      - OUTPUT_DIR=/output
-      - PORT=3100
     restart: unless-stopped
     depends_on:
       - backend

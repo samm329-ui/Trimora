@@ -17,6 +17,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
+  const [groqKey, setGroqKey] = useState(localStorage.getItem('groq_key') || '');
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle');
@@ -87,6 +88,10 @@ function App() {
   }, [apiKey]);
 
   useEffect(() => {
+    if (groqKey) localStorage.setItem('groq_key', groqKey);
+  }, [groqKey]);
+
+  useEffect(() => {
     let interval;
     if ((status === 'processing' || status === 'completed') && jobId) {
       interval = setInterval(async () => {
@@ -124,7 +129,7 @@ function App() {
 
     try {
       let body;
-      const headers = { 'X-Gemini-Key': apiKey };
+      const headers = { 'X-Gemini-Key': apiKey, 'X-Groq-Key': groqKey };
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
@@ -138,7 +143,7 @@ function App() {
 
       const res = await fetch(getApiUrl('/api/process'), {
         method: 'POST',
-        headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey },
+        headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey, 'X-Groq-Key': groqKey },
         body
       });
 
@@ -160,6 +165,10 @@ function App() {
     setProcessingMedia(null);
     localStorage.removeItem(SESSION_KEY);
   };
+
+  const missingKeys = [];
+  if (!apiKey) missingKeys.push('Gemini');
+  if (!groqKey) missingKeys.push('Groq');
 
   const Sidebar = () => (
     <div className="w-20 lg:w-64 bg-surface border-r border-white/5 flex flex-col h-full shrink-0 transition-all duration-300">
@@ -251,26 +260,26 @@ function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            {!apiKey && (
+            {missingKeys.length > 0 && (
               <button
                 onClick={() => setActiveTab('settings')}
                 className="text-xs text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30 transition-colors flex items-center gap-1.5"
-                title="Click to configure your API key"
+                title="Click to configure your API keys"
               >
                 <AlertTriangle size={12} />
-                Gemini API Key Missing
+                {missingKeys.join('/')} API Key{missingKeys.length > 1 ? 's' : ''} Missing
               </button>
             )}
           </div>
         </header>
 
-        {!apiKey && activeTab !== 'settings' && (
+        {missingKeys.length > 0 && activeTab !== 'settings' && (
           <div className="mx-6 mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-4 shrink-0 animate-[fadeIn_0.3s_ease-out]">
             <div className="flex items-center gap-3 text-sm text-amber-200">
               <KeyRound size={16} className="shrink-0 text-amber-400" />
               <div>
-                <span className="font-semibold">Required API key missing.</span>{' '}
-                <span className="text-amber-200/80">Set your Gemini API key to use Trimora.</span>
+                <span className="font-semibold">Required API key{missingKeys.length > 1 ? 's' : ''} missing.</span>{' '}
+                <span className="text-amber-200/80">Set your {missingKeys.join(' and ')} key{missingKeys.length > 1 ? 's' : ''} to use Trimora.</span>
               </div>
             </div>
             <button
@@ -305,7 +314,8 @@ function App() {
                   <Shield size={12} /> Privacy: keys only live in your browser
                 </div>
               </div>
-              <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
+              <KeyInput onKeySet={setApiKey} savedKey={apiKey} provider="gemini" />
+              <KeyInput onKeySet={setGroqKey} savedKey={groqKey} provider="groq" />
             </div>
           )}
 

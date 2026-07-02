@@ -260,6 +260,7 @@ async def process_endpoint(
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    groq_key = request.headers.get("X-Groq-Key") or os.environ.get("GROQ_API_KEY", "")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
 
@@ -298,6 +299,8 @@ async def process_endpoint(
     cmd = [sys.executable, "-u", "main.py"]
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key
+    if groq_key:
+        env["GROQ_API_KEY"] = groq_key
 
     if url:
         cmd.extend(["-u", url])
@@ -352,6 +355,101 @@ async def get_status(job_id: str):
 from editor import VideoEditor
 from subtitles import generate_srt, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
+
+
+class EngineProcessRequest(BaseModel):
+    url: Optional[str] = None
+    category: str = "general"
+    acknowledged: bool = False
+
+
+@app.post("/api/engine/process")
+async def engine_process_endpoint(
+    req: EngineProcessRequest,
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+):
+    api_key = request.headers.get("X-Gemini-Key")
+    groq_key = request.headers.get("X-Groq-Key") or os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(status_code=400, detail="Groq API key required for engine pipeline")
+
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        req = EngineProcessRequest(**body)
+
+    if not req.url and not file:
+        raise HTTPException(status_code=400, detail="Must provide URL or File")
+    if not req.acknowledged:
+        raise HTTPException(status_code=400, detail="You must confirm you own the content or have rights to process it.")
+
+    job_id = str(uuid.uuid4())
+    job_output_dir = os.path.join(OUTPUT_DIR, job_id)
+    os.makedirs(job_output_dir, exist_ok=True)
+
+    input_path = None
+    if req.url:
+        from yt_dlp import YoutubeDL
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": os.path.join(job_output_dir, "%(id)s.%(ext)s"),
+            "quiet": True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(req.url, download=True)
+            input_path = os.path.join(job_output_dir, f"{info['id']}.{info['ext']}")
+    elif file:
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
+        with open(input_path, "wb") as buffer:
+            while content := await file.read(1024 * 1024):
+                buffer.write(content)
+
+    os.environ["GROQ_API_KEY"] = groq_key
+    if api_key:
+        os.environ["GEMINI_API_KEY"] = api_key
+
+    jobs[job_id] = {
+        'status': 'queued',
+        'logs': [f"Engine job {job_id} queued."],
+        'result': None,
+        'output_dir': job_output_dir,
+    }
+
+    asyncio.create_task(_run_engine_job(job_id, input_path, req.category, job_output_dir))
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+async def _run_engine_job(job_id: str, input_path: str, category: str, output_dir: str):
+    try:
+        jobs[job_id]['status'] = 'processing'
+        jobs[job_id]['logs'].append("Engine pipeline starting...")
+
+        from engine.pipeline import Pipeline
+        pipeline = Pipeline(video_id=job_id)
+
+        def run_sync():
+            return pipeline.run(input_path, category=category)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, run_sync)
+
+        if result.error:
+            jobs[job_id]['status'] = 'failed'
+            jobs[job_id]['logs'].append(f"Engine error: {result.error}")
+        else:
+            jobs[job_id]['status'] = 'completed'
+            jobs[job_id]['result'] = {
+                'video_id': result.video_id,
+                'candidates': result.candidates,
+                'best_clip': result.best_clip,
+                'stats': result.stats,
+            }
+            jobs[job_id]['logs'].append(f"Engine complete: {len(result.candidates)} candidates, best score {result.best_clip.get('total_score', 0) if result.best_clip else 0}")
+    except Exception as e:
+        jobs[job_id]['status'] = 'failed'
+        jobs[job_id]['logs'].append(f"Engine error: {str(e)}")
 
 
 class EditRequest(BaseModel):
