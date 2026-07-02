@@ -16,8 +16,9 @@ def extract_audio(video_path: str, output_path: str = None) -> str:
 
     subprocess.run([
         "ffmpeg", "-y", "-i", video_path,
-        "-q:a", "0", "-map", "a",
+        "-map", "a",
         "-ar", str(cfg.SAMPLE_RATE), "-ac", str(cfg.CHANNELS),
+        "-c:a", cfg.FFMPEG_AUDIO_CODEC, "-b:a", cfg.AUDIO_BITRATE,
         output_path
     ], check=True, capture_output=True)
 
